@@ -707,6 +707,10 @@ class Abstract_Wallet(object):
             if item.get('coinbase') and item.get('height') + COINBASE_MATURITY > self.network.get_local_height():
                 continue
             v = item.get('value')
+            if v >= amount + fee: 
+                while len(inputs) > 0:
+                    inputs.pop()
+                total = 0
             total += v
             self.add_input_info(item)
             tx.add_input(item)
