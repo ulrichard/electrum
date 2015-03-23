@@ -305,14 +305,17 @@ class DigiboxWallet(BIP32_HD_Wallet):
 
     def password_set(self):
         try:
-            self.hid_open()
                 
             # Check if device has been set up by asking for its name.
             # Will return an encryption error if set up.
             # Will ask for a password if not set up.
             msg = '{"name":""}'
+            
+            self.hid_open()
             self.hid_device.write('\0' + bytearray(msg) + '\0'*(digibox_report_buf_size-len(msg))) 
             r = self.hid_device.read(digibox_report_buf_size)
+            self.hid_close()
+            
             r = str(bytearray(r)).rstrip(' \t\r\n\0')
             reply = json.loads(r)
                 
@@ -345,7 +348,8 @@ class DigiboxWallet(BIP32_HD_Wallet):
             QMessageBox.critical(None, _('Error'), _(e), _('OK'))
             return False
         finally:
-            self.hid_close()
+            pass
+            #self.hid_close()
         
 
     def load_electrum(self, seed):
@@ -392,6 +396,27 @@ class DigiboxWallet(BIP32_HD_Wallet):
     #
     def digibox_sign(self, tx):
         try:
+
+            change_keypath = None
+            
+            for i, txout in enumerate(tx.outputs):
+                addr = tx.outputs[i][1]
+                #print addr
+                if self.is_change(addr):
+                    change_keypath = self.address_id(addr)
+                    #print change_keypath
+            
+            if i == 0:
+                raise Exception("Signing canceled: The submitted transaction sends "
+                                "all funds to a single address. For security reasons, "
+                                "at least 1 satoshi must go to a change address.")
+            
+            if change_keypath == None:
+                raise Exception("Signing canceled: Change address not present. For "
+                                "security reasons, at least 1 satoshi must go to a "
+                                "change address.")
+
+
             require_pass = True;
             for i, txin in enumerate(tx.inputs):
                 signatures = filter(None, txin['signatures'])
@@ -406,16 +431,18 @@ class DigiboxWallet(BIP32_HD_Wallet):
                     keypath = self.address_id(tx.inputs[i]['address'])
                     if True:
                         for_sig = tx.tx_for_sig(i)
-                        msg = '{"sign": {"type":"raw", "id":"%i %i", "data":"%s", "keypath":"%s"} }' % (i, ii, for_sig, keypath)
+                        msg = '{"sign": {"type":"transaction", "id":"%i %i", "data":"%s", "keypath":"%s", "change_keypath":"%s"} }' % \
+                               (i, ii, for_sig, keypath, change_keypath)
                     else:
                         for_sig = Hash(tx.tx_for_sig(i).decode('hex'))
                         for_sig = for_sig.encode('hex')
-                        msg = '{"sign": {"type":"hash", "id":"%i %i", "data":"%s", "keypath":"%s"} }' % (i, ii, for_sig, keypath)
+                        msg = '{"sign": {"type":"hash", "id":"%i %i", "data":"%s", "keypath":"%s"} }' % \
+                               (i, ii, for_sig, keypath)
            
                     reply = self.commander(msg, require_pass)
 
                     if reply==None: 
-                        raise Exception("Signing error")
+                        raise Exception("Could not sign transaction.")
 
                     if 'sign' in reply:
                         require_pass = False
@@ -429,11 +456,11 @@ class DigiboxWallet(BIP32_HD_Wallet):
                         sig = sigencode_der(r, s, generator_secp256k1.order())
                         tx.inputs[i]['signatures'][ii] = sig.encode('hex')
                     else:
-                        raise Exception("Signing error")
+                        raise Exception("Could not sign transaction.")
       
 
         except Exception as e:
-            raise Exception("Could not sign transaction.") 
+            raise Exception(e) 
         else:
             print_error("is_complete", tx.is_complete())
             tx.raw = tx.serialize()
@@ -465,7 +492,6 @@ class DigiboxWallet(BIP32_HD_Wallet):
                     self.password = old_pass
                     self.has_pass = False
                 elif require_pass or not self.has_pass:
-                    print 'debug1'
                     new_pass = False
                     sham, self.password = digibox_dialog_password.password_dialog(new_pass)
                 
@@ -488,7 +514,8 @@ class DigiboxWallet(BIP32_HD_Wallet):
                 print "<< end json"
             
             if 'echo' in reply:
-                echo = DecodeAES(secret, ''.join(reply["echo"]))
+                echo = reply["echo"]
+                #echo = DecodeAES(secret, ''.join(reply["echo"]))
                 if debug:
                     print "Echo:  " + echo
                     #print echo
@@ -969,9 +996,7 @@ class DigiboxPasswordDialog(QThread):
     def password_dialog(self, new_pass=False, old_pass=True):
         msg = _("Please enter your password")
         
-        print 'debug pw'
         self.d = QDialog()
-        print 'debug pw'
         self.d.setModal(1)
         self.d.setLayout( self.make_password_dialog(msg, new_pass, old_pass) )
 
