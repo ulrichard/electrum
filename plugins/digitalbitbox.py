@@ -24,7 +24,7 @@ except ImportError as e:
     print "Digital Bitbox error: %s." % e.message
 
 
-digibox_report_buf_size = 4096
+digibox_report_buf_size = 2048
 
 EncodeAES = lambda secret, s: base64.b64encode(aes.encryptData(secret,s))
 DecodeAES = lambda secret, e: aes.decryptData(secret, base64.b64decode(e))
