@@ -595,7 +595,7 @@ class DigiboxTab(object):
         grid.setColumnStretch(6, 1)
         grid.setRowStretch(8, 1)
        
-        
+        '''
         # touch button
         touch_ql = QLabel(_("Touch button"))
         touch_ql_timeout   = QLabel(_("timeout [sec]"))
@@ -609,7 +609,7 @@ class DigiboxTab(object):
             self.wallet.commander('{"touchbutton":{"threshold":"%s", "timeout":"%s"}}' % (\
                                       str(touch_qsb_thresh.text()), str(touch_qsb_timeout.text()) ), False)
         touch_qpb = EnterButton(_("Update"), touch_button_push)
-
+        '''
 
         # get xpub
         xpub_default_keypath = "m/44'/0'/0'"
@@ -705,6 +705,7 @@ class DigiboxTab(object):
         grid.addWidget(password_qpb, 4, 1, 1, 1)
         grid.addWidget(reset_qpb,    5, 1, 1, 1)
         
+        '''
         grid.addWidget(touch_ql,           1, 4, 1, 1)
         grid.addWidget(touch_qsb_timeout,  1, 5, 1, 1)
         grid.addWidget(touch_ql_timeout,   1, 6, 1, 1)
@@ -712,7 +713,6 @@ class DigiboxTab(object):
         grid.addWidget(touch_ql_thresh,    2, 6, 1, 1)
         grid.addWidget(touch_qpb,          3, 6, 1, 1)
         
-        '''
         grid.addWidget(xpub_ql,    5, 4, 1, 1)
         grid.addWidget(xpub_qle,   5, 5, 1, 1)
         grid.addWidget(xpub_qpb,   5, 6, 1, 1)
