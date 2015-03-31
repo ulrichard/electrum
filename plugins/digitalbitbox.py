@@ -355,7 +355,7 @@ class DigiboxWallet(BIP32_HD_Wallet):
     def load_electrum(self, seed):
         if self.password_set():
             digibox_dialog_wait.start_wait(_("Loading the mnemonic, please wait."))
-            if self.commander(('{"load":{"mnemonic":"%s"}}' % seed), False):
+            if self.commander(('{"seed":{"source":"%s"}}' % seed), False):
                 digibox_dialog_wait.finish_wait()
                 return True
             digibox_dialog_wait.finish_wait()
@@ -364,20 +364,18 @@ class DigiboxWallet(BIP32_HD_Wallet):
 
     def load_sd(self, filename, decrypt):
         if self.password_set():
-            msg = '{"load":{"decrypt":"' + ('yes' if decrypt else 'no') + ('","filename":"%s"}}' % filename)
+            msg = '{"seed":{"decrypt":"' + ('yes' if decrypt else 'no') + ('","source":"%s"}}' % filename)
             if self.commander(msg, False):
                 return True
         return False
 
 
     def new_wallet(self):
-        strength, salt = digibox_dialog_install.new_wallet()
-        if strength==None:
-            return
+        salt = digibox_dialog_install.new_wallet()
         ret = None
         if self.password_set():
             digibox_dialog_wait.start_wait(_("Creating a new wallet, please wait."))
-            ret = self.commander('{"seed":{"strength":"%i","salt":"%s"}}' % (strength, salt), False)
+            ret = self.commander('{"seed":{"source":"create","salt":"%s"}}' % salt, False)
             digibox_dialog_wait.finish_wait() 
         return ret 
 
@@ -611,6 +609,29 @@ class DigiboxTab(object):
         touch_qpb = EnterButton(_("Update"), touch_button_push)
         '''
 
+        # create / export verification password
+        verifypw_ql = QLabel(_("Verification\npassword"))
+        verifypw_ql.setAlignment(Qt.AlignCenter)
+        def verifypw_create_button_push():
+            r = self.wallet.commander('{"verifypass":"create"}', False)
+        def verifypw_export_button_push():
+            r = self.wallet.commander('{"verifypass":"export"}', False)
+        verifypw_create_qpb = EnterButton(_("Create"), verifypw_create_button_push)
+        verifypw_export_qpb = EnterButton(_("Export"), verifypw_export_button_push)
+
+        # list / erase uSD files
+        sdcard_ql = QLabel(_("SD card"))
+        sdcard_ql.setAlignment(Qt.AlignCenter)
+        def sdcard_list_button_push():
+            r = self.wallet.commander('{"backup":"list"}', False)
+            if r:
+                self.show_text_qr("SD card files", r["sd_list"])
+        def sdcard_erase_button_push():
+            r = self.wallet.commander('{"backup":"erase"}', False)
+        sdcard_list_qpb = EnterButton(_("List files"), sdcard_list_button_push)
+        sdcard_erase_qpb = EnterButton(_("Erase files"), sdcard_erase_button_push)
+        
+
         # get xpub
         xpub_default_keypath = "m/44'/0'/0'"
         xpub_ql = QLabel(_("BIP32 keypath"))
@@ -619,7 +640,7 @@ class DigiboxTab(object):
         def xpub_button_push():
             xpub = self.wallet.get_public_key(str(xpub_qle.text()) if not xpub_qle.text()=="" else xpub_default_keypath)
             if xpub:
-                self.show_number_qr("Extended Public Key", xpub)
+                self.show_text_qr("Extended Public Key", xpub)
         xpub_qpb = EnterButton(_("Get xpub"), xpub_button_push)
         
         
@@ -654,14 +675,14 @@ class DigiboxTab(object):
                 return
             if self.wallet.commander('{"backup":{"encrypt":"%s", "filename":"%s"}}' % (encrypt, filename), False):
                 QMessageBox.information(None, _('Information'), _("Backup successful."), _('OK'))
-        backup_qpb = EnterButton(_("Backup"), backup_button_push)
+        backup_qpb = EnterButton(_("Backup seed"), backup_button_push)
        
 
         # random number
         def random_button_push():
             r = self.wallet.commander('{"random":"pseudo"}', False)
             if r:
-                self.show_number_qr("Random number", r["random"])
+                self.show_text_qr("Random number", r["random"])
         random_qpb = EnterButton(_("Random #"), random_button_push)
        
 
@@ -699,11 +720,23 @@ class DigiboxTab(object):
         grid.addWidget(name_ql,      0, 0, 1, 2)
         grid.addWidget(name_qpb,     1, 0, 1, 1)
         
-        grid.addWidget(led_qpb,      1, 1, 1, 1)
-        grid.addWidget(random_qpb,   2, 1, 1, 1)
-        grid.addWidget(backup_qpb,   3, 1, 1, 1)
-        grid.addWidget(password_qpb, 4, 1, 1, 1)
-        grid.addWidget(reset_qpb,    5, 1, 1, 1)
+        grid.addWidget(led_qpb,      2, 0, 1, 1)
+        grid.addWidget(random_qpb,   3, 0, 1, 1)
+        grid.addWidget(password_qpb, 4, 0, 1, 1)
+        grid.addWidget(reset_qpb,    5, 0, 1, 1)
+        
+        grid.addWidget(sdcard_ql,           1, 5, 1, 1)
+        grid.addWidget(sdcard_list_qpb,     2, 5, 1, 1)
+        grid.addWidget(sdcard_erase_qpb,    3, 5, 1, 1)
+        grid.addWidget(backup_qpb,          4, 5, 1, 1)
+        
+        grid.addWidget(verifypw_ql,         1, 6, 1, 1)
+        grid.addWidget(verifypw_create_qpb, 2, 6, 1, 1)
+        grid.addWidget(verifypw_export_qpb, 3, 6, 1, 1)
+        verifypw_create_qpb.setMaximumWidth(100) 
+        verifypw_export_qpb.setMaximumWidth(100) 
+
+        
         
         '''
         grid.addWidget(touch_ql,           1, 4, 1, 1)
@@ -727,7 +760,7 @@ class DigiboxTab(object):
         return w
 
 
-    def show_number_qr(self, title, data):
+    def show_text_qr(self, title, data):
         dialog = QDialog()
         dialog.setModal(1)
         dialog.setWindowTitle(_(title))
@@ -832,20 +865,24 @@ class DigiboxInstallDialog(QThread):
         b2 = QRadioButton(gb1)
         b1.setText(_("yes (the Electrum password will be used for decryption)"))
         b2.setText(_("no"))
+        l  = QLabel(_("\n"))
         
         group1 = QButtonGroup()
         group1.addButton(b1)
         group1.addButton(b2)
-        b1.setChecked(True)
+        b2.setChecked(True)
         
         gb2 = QGroupBox(_("Enter the file name"))
         fn = QLineEdit()
-        
+        fn.setMaximumWidth(200)
+
         vbox = QVBoxLayout()
         vbox.addWidget(main_label)
+        vbox.addWidget(l)
         vbox.addWidget(gb1)
         vbox.addWidget(b1)
         vbox.addWidget(b2)
+        vbox.addWidget(l)
         vbox.addWidget(gb2)
         vbox.addWidget(fn)
         
@@ -860,35 +897,15 @@ class DigiboxInstallDialog(QThread):
 
     def new_wallet(self):
         self.gui_setup()
-        main_label = QLabel(_("Please enter details for the new BIP32 wallet seed."))
 
-        ql1 = QLabel(_("Choose the number of mnemonic words:"))
-        gb1 = QGroupBox()
-        b1 = QRadioButton(gb1)
-        b2 = QRadioButton(gb1)
-        b3 = QRadioButton(gb1)
-        b1.setText(_("24"))
-        b2.setText(_("16"))
-        b3.setText(_("12"))
-        
-        group1 = QButtonGroup()
-        group1.addButton(b1)
-        group1.addButton(b2)
-        group1.addButton(b3)
-        b1.setChecked(True)
-        
-        ql2 = QLabel(_("Enter the BIP32 passphase (i.e. the salt) or leave it empty:"))
+        ql2 = QLabel(_("Enter an optional BIP32 passphase (i.e. the salt). Otherwise leave empty."))
         gb2 = QGroupBox()
         gb3 = QGroupBox(_("* Note that the passphrase is NOT saved on the Digital Bitbox."))
-        gb4 = QGroupBox(_("* Be sure to remember it! Otherwise, leave it empty."))
+        gb4 = QGroupBox(_("* Be sure to remember it if set!"))
         fn = QLineEdit()
-        
+        fn.setMaximumWidth(200)
+
         vbox = QVBoxLayout()
-        vbox.addWidget(main_label)
-        vbox.addWidget(ql1)
-        vbox.addWidget(b1)
-        vbox.addWidget(b2)
-        vbox.addWidget(b3)
         vbox.addWidget(ql2)
         vbox.addWidget(fn)
         vbox.addWidget(gb3)
@@ -897,19 +914,10 @@ class DigiboxInstallDialog(QThread):
         self.gui_finish(vbox)
 
         if not self.d.exec_():
-            return None, None
+            return None
 
-        if b1.isChecked():
-            strength = 256      
-        elif b2.isChecked():
-            strength = 192 
-        elif b3.isChecked():
-            strength = 128       
-        else:
-            action = None
-        decrypt = True if b1.isChecked() else False
         salt = "%s" % fn.text()
-        return strength, salt
+        return salt
 
 
 # ########################################################################
