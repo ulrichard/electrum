@@ -236,7 +236,7 @@ class DigiboxWallet(BIP32_HD_Wallet):
                                     _('Cancel'), _('OK'))
         if reply:
             if self.commander('{"reset":"__ERASE__"}', False, False):
-                QMessageBox.information(None, _('Information'), _('Reset successful.'), _('OK'))
+                QMessageBox.information(None, _('Information'), _('Erased.'), _('OK'))
 
         
     def address_id(self, address):
@@ -339,7 +339,7 @@ class DigiboxWallet(BIP32_HD_Wallet):
                 if self.commander(('{"password":"%s"}' % password), False, False, ""):
                     self.password = password
                     self.has_pass = True
-                    QMessageBox.information(None, _('Information'), _("Password set successfully."), _('OK'))
+                    #QMessageBox.information(None, _('Information'), _("Password set successfully."), _('OK'))
                     return True
                 else:
                     return False
@@ -404,17 +404,6 @@ class DigiboxWallet(BIP32_HD_Wallet):
                     change_keypath = self.address_id(addr)
                     #print change_keypath
             
-            if i == 0:
-                raise Exception("Signing canceled: The submitted transaction sends "
-                                "all funds to a single address. For security reasons, "
-                                "at least 1 satoshi must go to a change address.")
-            
-            if change_keypath == None:
-                raise Exception("Signing canceled: Change address not present. For "
-                                "security reasons, at least 1 satoshi must go to a "
-                                "change address.")
-
-
             require_pass = True;
             for i, txin in enumerate(tx.inputs):
                 signatures = filter(None, txin['signatures'])
@@ -429,13 +418,13 @@ class DigiboxWallet(BIP32_HD_Wallet):
                     keypath = self.address_id(tx.inputs[i]['address'])
                     if True:
                         for_sig = tx.tx_for_sig(i)
-                        msg = '{"sign": {"type":"transaction", "id":"%i %i", "data":"%s", "keypath":"%s", "change_keypath":"%s"} }' % \
-                               (i, ii, for_sig, keypath, change_keypath)
+                        msg = '{"sign": {"type":"transaction", "data":"%s", "keypath":"%s", "change_keypath":"%s"} }' % \
+                               (for_sig, keypath, change_keypath)
                     else:
                         for_sig = Hash(tx.tx_for_sig(i).decode('hex'))
                         for_sig = for_sig.encode('hex')
-                        msg = '{"sign": {"type":"hash", "id":"%i %i", "data":"%s", "keypath":"%s"} }' % \
-                               (i, ii, for_sig, keypath)
+                        msg = '{"sign": {"type":"hash", "data":"%s", "keypath":"%s"} }' % \
+                               (for_sig, keypath)
            
                     reply = self.commander(msg, require_pass)
 
@@ -446,7 +435,6 @@ class DigiboxWallet(BIP32_HD_Wallet):
                         require_pass = False
                         print_error("Adding signature for", x_pubkey)
                         item = reply['sign']
-                        #[i, ii] = [int(x) for x in item['id'].split()]
                         tx.inputs[i]['x_pubkeys'][ii] = item['pubkey']
                         tx.inputs[i]['pubkeys'][ii] = item['pubkey']
                         r = int(item['sig'][:64], 16)
@@ -476,6 +464,8 @@ class DigiboxWallet(BIP32_HD_Wallet):
             reply = None
             
             self.hid_open()
+            
+            msg_l = json.loads(msg)
         
             # Send message
             if debug:
@@ -498,7 +488,20 @@ class DigiboxWallet(BIP32_HD_Wallet):
                         secret = Hash(self.password)
                         msg = EncodeAES(secret,msg)
             
-            digibox_dialog_wait.start_wait(_("Processing command, please wait."))
+            wait_msg = "Processing command, please wait."
+            print msg_l
+            '''
+            if 'password' in msg_l:
+                wait_msg = "Press the touch button to change the password."
+            if 'seed' in msg_l:
+                wait_msg = "Press the touch button to create a wallet."
+            '''
+            if 'reset' in msg_l:
+                wait_msg = "Press the touch button 3 times to erase."
+            print 'tmeppp'
+
+            
+            digibox_dialog_wait.start_wait(_(wait_msg))
             self.hid_device.write('\0' + bytearray(msg) + '\0' * (digibox_report_buf_size - len(msg))) 
             r = self.hid_device.read(digibox_report_buf_size)
             r = str(bytearray(r)).rstrip(' \t\r\n\0')
@@ -536,11 +539,21 @@ class DigiboxWallet(BIP32_HD_Wallet):
                 if len(self.password):
                     self.has_pass = True
                     reply = DecodeAES(secret, ''.join(reply["ciphertext"]))
-                    reply = json.loads(reply)
                     if debug:
                         print "Reply decrypted:  "
                         print reply
-            
+                    reply = json.loads(reply)
+                    
+                    if '2FA' in reply:
+                        pin = line_dialog(None, _('Digital Bitbox'), \
+                                _('Enter the lock code from the 2FA device') + ':', \
+                                _('OK'), None)
+                        reply = DecodeAES(Hash(pin), ''.join(reply["2FA"]))
+                        reply = json.loads(reply)
+                        if debug:
+                            print "Reply decrypted (2FA):  "
+                            print reply
+
                     for key in reply:
                         if 'error' in reply[key]:
                             QMessageBox.critical(None, _('Error'), _(reply[key]['error']), _('OK'))
@@ -564,13 +577,13 @@ class DigiboxWallet(BIP32_HD_Wallet):
 
     
     def hid_open(self):
-        print "Opening Digital Bitbox"
+        #print "Opening Digital Bitbox"
         self.hid_device = hid.device()
         self.hid_device.open(0x03eb, 0x2402)
 
 
     def hid_close(self):
-        print "Closing Digital Bitbox"
+        #print "Closing Digital Bitbox"
         self.hid_device.close()
 
 
@@ -653,7 +666,7 @@ class DigiboxTab(object):
                 name = ""
             else:
                 name = line_dialog(None, _('Digital Bitbox'), _('Enter new name') + ':', _('OK'), None)
-                if name=="":
+                if name=="" or name==None:
                     return
             name = self.wallet.commander(('{"name":"%s"}' % name), False)
             if name:
@@ -668,12 +681,19 @@ class DigiboxTab(object):
         led_qpb = EnterButton(_("Toggle LED"), led_button_push)
 
 
+        # lock
+        def lock_button_push():
+            r = self.wallet.commander('{"device":"lock"}', False)
+        lock_qpb = EnterButton(_("Lock"), lock_button_push)
+
+
         # backup
         def backup_button_push():
             encrypt, filename = digibox_dialog_install.sd_info()
             if filename==None or filename=="":
                 return
-            if self.wallet.commander('{"backup":{"encrypt":"%s", "filename":"%s"}}' % (encrypt, filename), False):
+            enc = 'yes' if encrypt else 'no'
+            if self.wallet.commander('{"backup":{"encrypt":"%s", "filename":"%s"}}' % (enc, filename), False):
                 QMessageBox.information(None, _('Information'), _("Backup successful."), _('OK'))
         backup_qpb = EnterButton(_("Backup seed"), backup_button_push)
        
@@ -692,7 +712,8 @@ class DigiboxTab(object):
             password = '' if password==None else password
             old_password = '' if old_password==None else old_password
             if not self.wallet.commander(('{"password":"%s"}' % password), False, True, old_password)==None:
-                QMessageBox.information(None, _('Information'), _("Password set successfully."), _('OK'))
+                pass
+                #QMessageBox.information(None, _('Information'), _("Password set successfully."), _('OK'))
         password_qpb = EnterButton(_("Set password"), password_button_push)
 
 
@@ -717,13 +738,14 @@ class DigiboxTab(object):
         cmd_qpb = EnterButton(_("Send"), cmd_button_push)
         
 
-        grid.addWidget(name_ql,      0, 0, 1, 2)
-        grid.addWidget(name_qpb,     1, 0, 1, 1)
+        grid.addWidget(name_ql,      1, 0, 1, 2)
+        grid.addWidget(name_qpb,     2, 0, 1, 1)
         
-        grid.addWidget(led_qpb,      2, 0, 1, 1)
-        grid.addWidget(random_qpb,   3, 0, 1, 1)
-        grid.addWidget(password_qpb, 4, 0, 1, 1)
-        grid.addWidget(reset_qpb,    5, 0, 1, 1)
+        grid.addWidget(led_qpb,      2, 1, 1, 1)
+        grid.addWidget(random_qpb,   3, 1, 1, 1)
+        grid.addWidget(password_qpb, 4, 1, 1, 1)
+        grid.addWidget(reset_qpb,    5, 1, 1, 1)
+        grid.addWidget(lock_qpb,     6, 1, 1, 1)
         
         grid.addWidget(sdcard_ql,           1, 5, 1, 1)
         grid.addWidget(sdcard_list_qpb,     2, 5, 1, 1)
@@ -805,7 +827,12 @@ class DigiboxInstallDialog(QThread):
     
     def gui_finish(self, vbox):
         vbox.addStretch(1)
-        vbox.addLayout(Buttons(CancelButton(self.d), OkButton(self.d, _('Next'))))
+        
+        b = OkButton(self.d)
+        c = CancelButton(self.d)
+        vbox.addLayout(Buttons(c, b))
+        #vbox.addLayout(Buttons(CancelButton(self.d), OkButton(self.d, _('Next'))))
+        #vbox.addLayout(Buttons(CancelButton(self.d), OkButton(self.d)))
         self.set_layout(vbox)
         self.d.show()
         self.d.raise_()
