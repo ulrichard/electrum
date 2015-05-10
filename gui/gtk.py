@@ -466,6 +466,9 @@ class ElectrumWindow:
         self.window.set_default_size(720, 350)
         self.wallet_updated = False
 
+        from electrum.util import StoreDict
+        self.contacts = StoreDict(self.config, 'contacts')
+
         vbox = Gtk.VBox()
 
         self.notebook = Gtk.Notebook()
@@ -810,7 +813,7 @@ class ElectrumWindow:
             self.show_message(str(e))
             return
 
-        if tx.requires_fee(self.wallet.verifier) and fee < MIN_RELAY_TX_FEE:
+        if tx.requires_fee(self.wallet) and fee < MIN_RELAY_TX_FEE:
             self.show_message( "This transaction requires a higher fee, or it will not be propagated by the network." )
             return
 
@@ -1119,9 +1122,12 @@ class ElectrumWindow:
                 text = "Synchronizing..."
             else:
                 self.status_image.set_from_stock(Gtk.STOCK_YES, Gtk.IconSize.MENU)
-                c, u = self.wallet.get_balance()
-                text =  "Balance: %s "%( format_satoshis(c,False,self.num_zeros) )
-                if u: text +=  "[%s unconfirmed]"%( format_satoshis(u,True,self.num_zeros).strip() )
+                c, u, x = self.wallet.get_balance()
+                text = "Balance: %s "%(format_satoshis(c, False, self.num_zeros))
+                if u:
+                    text += "[%s unconfirmed]"%(format_satoshis(u, True, self.num_zeros).strip())
+                if x:
+                    text += "[%s unmatured]"%(format_satoshis(x, True, self.num_zeros).strip())
         else:
             self.status_image.set_from_stock(Gtk.STOCK_NO, Gtk.IconSize.MENU)
             self.network_button.set_tooltip_text("Not connected.")
@@ -1145,33 +1151,26 @@ class ElectrumWindow:
             if self.wallet.is_change(address): Type = "C"
             if address in self.wallet.imported_keys.keys():
                 Type = "I"
-            c, u = self.wallet.get_addr_balance(address)
+            c, u, x = self.wallet.get_addr_balance(address)
             if address in self.wallet.frozen_addresses: Type = Type + "F"
             label = self.wallet.labels.get(address)
             h = self.wallet.history.get(address,[])
             n = len(h)
             tx = "0" if n==0 else "%d"%n
-            self.recv_list.append((address, label, tx, format_satoshis(c,False,self.num_zeros), Type ))
+            self.recv_list.append((address, label, tx, format_satoshis(c+u+x, False, self.num_zeros), Type ))
 
     def update_sending_tab(self):
-        # detect addresses that are not mine in history, add them here...
         self.addressbook_list.clear()
-        #for alias, v in self.wallet.aliases.items():
-        #    s, target = v
-        #    label = self.wallet.labels.get(alias)
-        #    self.addressbook_list.append((alias, label, '-'))
-            
-        for address in self.wallet.addressbook:
-            label = self.wallet.labels.get(address)
-            n = self.wallet.get_num_tx(address)
-            self.addressbook_list.append((address, label, "%d"%n))
+        for k, v in self.contacts.items():
+            t, v = v
+            self.addressbook_list.append((k, v, t))
 
     def update_history_tab(self):
         cursor = self.history_treeview.get_cursor()[0]
         self.history_list.clear()
 
-        for item in self.wallet.get_tx_history():
-            tx_hash, conf, is_mine, value, fee, balance, timestamp = item
+        for item in self.wallet.get_history():
+            tx_hash, conf, value, timestamp, balance = item
             if conf > 0:
                 try:
                     time_str = datetime.datetime.fromtimestamp( timestamp).isoformat(' ')[:-3]
@@ -1199,8 +1198,9 @@ class ElectrumWindow:
         import datetime
         if not tx_hash: return ''
         tx = self.wallet.transactions.get(tx_hash)
-        is_relevant, is_mine, v, fee = self.wallet.get_tx_value(tx)
-        conf, timestamp = self.wallet.verifier.get_confirmations(tx_hash)
+        tx.deserialize()
+        is_relevant, is_mine, v, fee = self.wallet.get_wallet_delta(tx)
+        conf, timestamp = self.wallet.get_confirmations(tx_hash)
 
         if timestamp:
             time_str = datetime.datetime.fromtimestamp(timestamp).isoformat(' ')[:-3]
@@ -1267,7 +1267,7 @@ class ElectrumWindow:
 
         if result == 1:
             if is_valid(address):
-                self.wallet.add_contact(address,label)
+                self.contacts[label] = address
                 self.update_sending_tab()
             else:
                 errorDialog = Gtk.MessageDialog(
@@ -1290,7 +1290,7 @@ class ElectrumGui():
 
     def main(self, url=None):
 
-        storage = WalletStorage(self.config)
+        storage = WalletStorage(self.config.get_wallet_path())
         if not storage.file_exists:
             action = self.restore_or_create()
             if not action:

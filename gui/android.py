@@ -76,11 +76,7 @@ def edit_label(addr):
 def select_from_contacts():
     title = 'Contacts:'
     droid.dialogCreateAlert(title)
-    l = []
-    for i in range(len(wallet.addressbook)):
-        addr = wallet.addressbook[i]
-        label = wallet.labels.get(addr,addr)
-        l.append( label )
+    l = contacts.keys()
     droid.dialogSetItems(l)
     droid.dialogSetPositiveButtonText('New contact')
     droid.dialogShow()
@@ -92,8 +88,8 @@ def select_from_contacts():
 
     result = response.get('item')
     if result is not None:
-        addr = wallet.addressbook[result]
-        return addr
+        t, v = contacts.get(result)
+        return v
 
 
 
@@ -323,10 +319,10 @@ settings_layout = make_layout(""" <ListView
 
 def get_history_values(n):
     values = []
-    h = wallet.get_tx_history()
+    h = wallet.get_history()
     length = min(n, len(h))
     for i in range(length):
-        tx_hash, conf, is_mine, value, fee, balance, timestamp = h[-i-1]
+        tx_hash, conf, value, timestamp, balance = h[-i-1]
         try:
             dt = datetime.datetime.fromtimestamp( timestamp )
             if dt.date() == dt.today().date():
@@ -338,7 +334,7 @@ def get_history_values(n):
         conf_str = 'v' if conf else 'o'
         label, is_default_label = wallet.get_label(tx_hash)
         label = label.replace('<','').replace('>','')
-        values.append((conf_str, '  ' + time_str, '  ' + format_satoshis(value,True), '  ' + label))
+        values.append((conf_str, '  ' + time_str, '  ' + format_satoshis(value, True), '  ' + label))
 
     return values
 
@@ -414,9 +410,12 @@ def update_layout():
     elif not wallet.up_to_date:
         text = "Synchronizing..."
     else:
-        c, u = wallet.get_balance()
+        c, u, x = wallet.get_balance()
         text = "Balance:"+format_satoshis(c) 
-        if u : text += '   [' + format_satoshis(u,True).strip() + ']'
+        if u:
+            text += '   [' + format_satoshis(u,True).strip() + ']'
+        if x:
+            text += '   [' + format_satoshis(x,True).strip() + ']'
 
 
     # vibrate if status changed
@@ -483,7 +482,8 @@ def make_new_contact():
                 address = None
             if address:
                 if modal_question('Add to contacts?', address):
-                    wallet.add_contact(address)
+                    # fixme: ask for key
+                    contacts[address] = ('address', address)
         else:
             modal_dialog('Invalid address', data)
 
@@ -893,18 +893,21 @@ droid = android.Android()
 menu_commands = ["send", "receive", "settings", "contacts", "main"]
 wallet = None
 network = None
+contacts = None
 
 class ElectrumGui:
 
     def __init__(self, config, _network):
-        global wallet, network
+        global wallet, network, contacts
         network = _network
         network.register_callback('updated', update_callback)
         network.register_callback('connected', update_callback)
         network.register_callback('disconnected', update_callback)
         network.register_callback('disconnecting', update_callback)
         
-        storage = WalletStorage(config)
+        contacts = util.StoreDict(config, 'contacts')
+
+        storage = WalletStorage(config.get_wallet_path())
         if not storage.file_exists:
             action = self.restore_or_create()
             if not action:
@@ -924,22 +927,22 @@ class ElectrumGui:
                 wallet = Wallet(storage)
                 seed = wallet.make_seed()
                 modal_dialog('Your seed is:', seed)
+                wallet.add_seed(seed, password)
+                wallet.create_master_keys(password)
+                wallet.create_main_account(password)
             elif action == 'restore':
                 seed = self.seed_dialog()
                 if not seed:
                     exit()
                 if not Wallet.is_seed(seed):
                     exit()
-                wallet = Wallet.from_seed(seed, storage)
+                wallet = Wallet.from_seed(seed, password, storage)
             else:
                 exit()
 
             msg = "Creating wallet" if action == 'create' else "Restoring wallet"
             droid.dialogCreateSpinnerProgress("Electrum", msg)
             droid.dialogShow()
-            wallet.add_seed(seed, password)
-            wallet.create_master_keys(password)
-            wallet.create_main_account(password)
             wallet.start_threads(network)
             if action == 'restore':
                 wallet.restore(lambda x: None)

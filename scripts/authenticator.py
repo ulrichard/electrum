@@ -174,7 +174,7 @@ class Authenticator:
     def __init__(self):
         global wallet
         self.qr_data = None
-        storage = WalletStorage({'wallet_path':'/sdcard/electrum/authenticator'})
+        storage = WalletStorage('/sdcard/electrum/authenticator')
         if not storage.file_exists:
 
             action = self.restore_or_create()
@@ -299,7 +299,7 @@ class Authenticator:
                 data = r['extras']['SCAN_RESULT']
                 data = base_decode(data.encode('utf8'), None, base=43)
                 data = ''.join(chr(ord(b)) for b in data).encode('hex')
-                tx = Transaction.deserialize(data)
+                tx = Transaction(data)
                 #except:
                 #    modal_dialog('Error', 'Cannot parse transaction')
                 #    continue

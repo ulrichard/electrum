@@ -31,7 +31,7 @@ import aes
 
 ################################## transactions
 
-DUST_THRESHOLD = 5430
+DUST_THRESHOLD = 546
 MIN_RELAY_TX_FEE = 1000
 RECOMMENDED_FEE = 50000
 COINBASE_MATURITY = 100
@@ -163,11 +163,11 @@ def is_old_seed(seed):
 
     try:
         seed.decode('hex')
-        is_hex = (len(seed) == 32)
+        is_hex = (len(seed) == 32 or len(seed) == 64)
     except Exception:
         is_hex = False
 
-    return is_hex or (uses_electrum_words and len(words) == 12)
+    return is_hex or (uses_electrum_words and (len(words) == 12 or len(words) == 24))
 
 
 # pywallet openssl private key implementation

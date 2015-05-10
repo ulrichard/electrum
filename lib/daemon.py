@@ -35,13 +35,14 @@ DAEMON_SOCKET = 'daemon.sock'
 
 def do_start_daemon(config):
     import subprocess
+    args = [sys.executable, __file__, config.path]
     logfile = open(os.path.join(config.path, 'daemon.log'),'w')
-    p = subprocess.Popen([sys.executable,__file__], stderr=logfile, stdout=logfile, close_fds=(os.name=="posix"))
+    p = subprocess.Popen(args, stderr=logfile, stdout=logfile, close_fds=(os.name=="posix"))
     print_stderr("starting daemon (PID %d)"%p.pid)
 
 
 
-def get_daemon(config, start_daemon=True):
+def get_daemon(config, start_daemon):
     import socket
     daemon_socket = os.path.join(config.path, DAEMON_SOCKET)
     daemon_started = False
@@ -49,8 +50,6 @@ def get_daemon(config, start_daemon=True):
         try:
             s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             s.connect(daemon_socket)
-            if not daemon_started:
-                print_stderr("Connected to daemon")
             return s
         except socket.error:
             if not start_daemon:
@@ -74,6 +73,7 @@ class ClientThread(util.DaemonThread):
         self.client_pipe = util.SocketPipe(s)
         self.response_queue = Queue.Queue()
         self.server.add_client(self)
+        self.subscriptions = set()
 
     def reading_thread(self):
         while self.is_running():
@@ -84,9 +84,13 @@ class ClientThread(util.DaemonThread):
             if request is None:
                 self.running = False
                 break
-            if request.get('method') == 'daemon.stop':
+            method = request.get('method')
+            params = request.get('params')
+            if method == 'daemon.stop':
                 self.server.stop()
                 continue
+            if method[-10:] == '.subscribe':
+                self.subscriptions.add(repr((method, params)))
             self.server.send_request(self, request)
 
     def run(self):
@@ -166,8 +170,11 @@ class NetworkServer(util.DaemonThread):
                 client.response_queue.put(response)
             else:
                 # notification
+                m = response.get('method')
+                v = response.get('params')
                 for client in self.clients:
-                    client.response_queue.put(response)
+                    if repr((m, v)) in client.subscriptions:
+                        client.response_queue.put(response)
 
         self.network.stop()
         print_error("server exiting")
@@ -180,7 +187,7 @@ def daemon_loop(server):
     daemon_socket = os.path.join(server.config.path, DAEMON_SOCKET)
     if os.path.exists(daemon_socket):
         os.remove(daemon_socket)
-    daemon_timeout = server.config.get('daemon_timeout', 5*60)
+    daemon_timeout = server.config.get('daemon_timeout', None)
     s.bind(daemon_socket)
     s.listen(5)
     s.settimeout(1)
@@ -189,6 +196,8 @@ def daemon_loop(server):
         try:
             connection, address = s.accept()
         except socket.timeout:
+            if daemon_timeout is None:
+                continue
             if not server.clients:
                 if time.time() - t > daemon_timeout:
                     print_error("Daemon timeout")
@@ -207,7 +216,10 @@ def daemon_loop(server):
 
 if __name__ == '__main__':
     import simple_config, util
-    config = simple_config.SimpleConfig()
+    _config = {}
+    if len(sys.argv) > 1:
+        _config['electrum_path'] = sys.argv[1]
+    config = simple_config.SimpleConfig(_config)
     util.set_verbosity(True)
     server = NetworkServer(config)
     server.start()

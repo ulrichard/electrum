@@ -31,8 +31,9 @@ frozen_style = "QWidget { background-color:none; border:none;}"
 normal_style = "QPlainTextEdit { }"
 
 class PayToEdit(ScanQRTextEdit):
+
     def __init__(self, win):
-        super(PayToEdit,self).__init__(win=win)
+        ScanQRTextEdit.__init__(self)
         self.amount_edit = win.amount_e
         self.document().contentsChanged.connect(self.update_size)
         self.heightMin = 0
@@ -42,7 +43,7 @@ class PayToEdit(ScanQRTextEdit):
         self.outputs = []
         self.errors = []
         self.is_pr = False
-        self.scan_f = self.win.pay_from_URI
+        self.scan_f = win.pay_from_URI
         self.update_size()
         self.payto_address = None
 
@@ -163,6 +164,17 @@ class PayToEdit(ScanQRTextEdit):
     def is_multiline(self):
         return len(self.lines()) > 1
 
+    def paytomany(self):
+        from electrum.i18n import _
+        self.setText("\n\n\n")
+        self.update_size()
+        msg = '\n'.join([
+            _('Enter a list of outputs in the \'Pay to\' field.'),
+            _('One output per line.'),
+            _('Format: address, amount.'),
+            _('You may load a CSV file using the file icon.')
+        ])
+        QMessageBox.warning(self, _('Pay to many'), msg, _('OK'))
 
     def update_size(self):
         docHeight = self.document().size().height()

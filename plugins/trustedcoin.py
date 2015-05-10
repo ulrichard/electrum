@@ -330,10 +330,6 @@ class Plugin(BasePlugin):
         wallet.add_master_public_key('x3/', xpub3)
 
     @hook
-    def init_qt(self, gui):
-        self.window = gui.main_window
-
-    @hook
     def do_clear(self):
         self.is_billing = False
 
@@ -406,22 +402,29 @@ class Plugin(BasePlugin):
         except socket.error:
             self.window.show_message('Server not reachable, aborting')
             return
+        except TrustedCoinException as e:
+            if e.status_code == 409:
+                r = None
+            else:
+                raise e
 
-        otp_secret = r.get('otp_secret')
-        if not otp_secret:
-            self.window.show_message(_('Error'))
-            return
+        if r is None:
+            otp_secret = None
+        else:
+            otp_secret = r.get('otp_secret')
+            if not otp_secret:
+                self.window.show_message(_('Error'))
+                return
+            _xpub3 = r['xpubkey_cosigner']
+            _id = r['id']
+            try:
+                assert _id == self.user_id, ("user id error", _id, self.user_id)
+                assert xpub3 == _xpub3, ("xpub3 error", xpub3, _xpub3)
+            except Exception as e:
+                self.window.show_message(str(e))
+                return
 
-        _xpub3 = r['xpubkey_cosigner']
-        _id = r['id']
-        try:
-            assert _id == self.user_id, ("user id error", _id, self.user_id)
-            assert xpub3 == _xpub3, ("xpub3 error", xpub3, _xpub3)
-        except Exception as e:
-            self.window.show_message(str(e))
-            return
-            
-        if not self.setup_google_auth(self.window, _id, otp_secret):
+        if not self.setup_google_auth(self.window, self.user_id, otp_secret):
             return
 
         self.wallet.add_master_public_key('x3/', xpub3)
@@ -443,12 +446,12 @@ class Plugin(BasePlugin):
 
     @hook
     def send_tx(self, tx):
-        print_error("twofactor:send_tx")
+        self.print_error("twofactor:send_tx")
         if self.wallet.storage.get('wallet_type') != '2fa':
             return
 
         if not self.need_server(tx):
-            print_error("twofactor: xpub3 not needed")
+            self.print_error("twofactor: xpub3 not needed")
             self.auth_code = None
             return
 
@@ -476,7 +479,7 @@ class Plugin(BasePlugin):
         price = int(self.price_per_tx.get(1))
         assert price <= 100000
         if tx.input_value() < price:
-            print_error("not charging for this tx")
+            self.print_error("not charging for this tx")
             return 0
         return price
 
@@ -489,9 +492,9 @@ class Plugin(BasePlugin):
 
     @hook
     def sign_transaction(self, tx, password):
-        print_error("twofactor:sign")
+        self.print_error("twofactor:sign")
         if self.wallet.storage.get('wallet_type') != '2fa':
-            print_error("twofactor: aborting")
+            self.print_error("twofactor: aborting")
             return
 
         self.long_user_id, self.user_id = self.get_user_id()
@@ -510,13 +513,13 @@ class Plugin(BasePlugin):
             tx.error = str(e)
             return
 
-        print_error( "received answer", r)
+        self.print_error( "received answer", r)
         if not r:
             return 
 
         raw_tx = r.get('transaction')
         tx.update(raw_tx)
-        print_error("twofactor: is complete", tx.is_complete())
+        self.print_error("twofactor: is complete", tx.is_complete())
 
 
     def auth_dialog(self ):
@@ -584,24 +587,19 @@ class Plugin(BasePlugin):
         grid.addWidget(QLabel(self.window.format_amount(v) + ' ' + self.window.base_unit()), 0, 1)
 
         i = 1
+
+        if 10 not in self.price_per_tx:
+            self.price_per_tx[10] = 10 * self.price_per_tx.get(1)
+
         for k, v in sorted(self.price_per_tx.items()):
-            if k!=1:
-                grid.addWidget(QLabel("Price for %d prepaid transactions:"%k), i, 0)
-                grid.addWidget(QLabel(self.window.format_amount(v) + ' ' + self.window.base_unit()), i, 1)
-                b = QPushButton(_("Buy"))
-                grid.addWidget(b, i, 2)
-                def on_buy():
-                    d.close()
-                    if self.window.pluginsdialog:
-                        self.window.pluginsdialog.close()
-                    uri = "bitcoin:" + self.billing_info['billing_address'] + "?message=TrustedCoin Prepaid Transactions&amount="+str(Decimal(v)/100000000)
-                    self.is_billing = True
-                    self.window.pay_from_URI(uri)
-                    self.window.payto_e.setFrozen(True)
-                    self.window.message_e.setFrozen(True)
-                    self.window.amount_e.setFrozen(True)
-                b.clicked.connect(on_buy)
-                i += 1
+            if k == 1:
+                continue
+            grid.addWidget(QLabel("Price for %d prepaid transactions:"%k), i, 0)
+            grid.addWidget(QLabel("%d x "%k + self.window.format_amount(v/k) + ' ' + self.window.base_unit()), i, 1)
+            b = QPushButton(_("Buy"))
+            b.clicked.connect(lambda b, k=k, v=v: self.on_buy(k, v, d))
+            grid.addWidget(b, i, 2)
+            i += 1
 
         n = self.billing_info.get('tx_remaining', 0)
         grid.addWidget(QLabel(_("Your wallet has %d prepaid transactions.")%n), i, 0)
@@ -619,6 +617,16 @@ class Plugin(BasePlugin):
         vbox.addLayout(Buttons(CloseButton(d)))
         d.exec_()
 
+    def on_buy(self, k, v, d):
+        d.close()
+        if self.window.pluginsdialog:
+            self.window.pluginsdialog.close()
+        uri = "bitcoin:" + self.billing_info['billing_address'] + "?message=TrustedCoin %d Prepaid Transactions&amount="%k + str(Decimal(v)/100000000)
+        self.is_billing = True
+        self.window.pay_from_URI(uri)
+        self.window.payto_e.setFrozen(True)
+        self.window.message_e.setFrozen(True)
+        self.window.amount_e.setFrozen(True)
 
     def request_billing_info(self):
         billing_info = server.get(self.user_id)
@@ -670,16 +678,21 @@ class Plugin(BasePlugin):
 
 
     def setup_google_auth(self, window, _id, otp_secret):
-        uri = "otpauth://totp/%s?secret=%s"%('trustedcoin.com', otp_secret)
         vbox = QVBoxLayout()
         window.set_layout(vbox)
-        vbox.addWidget(QLabel("Please scan this QR code in Google Authenticator."))
-        qrw = QRCodeWidget(uri)
-        vbox.addWidget(qrw, 1)
-        #vbox.addWidget(QLabel(data), 0, Qt.AlignHCenter)
+        if otp_secret is not None:
+            uri = "otpauth://totp/%s?secret=%s"%('trustedcoin.com', otp_secret)
+            vbox.addWidget(QLabel("Please scan this QR code in Google Authenticator."))
+            qrw = QRCodeWidget(uri)
+            vbox.addWidget(qrw, 1)
+            msg = _('Then, enter your Google Authenticator code:')
+        else:
+            label = QLabel("This wallet is already registered, but it was never authenticated. To finalize your registration, please enter your Google Authenticator Code. If you do not have this code, delete the wallet file and start a new registration")
+            label.setWordWrap(1)
+            vbox.addWidget(label)
+            msg = _('Google Authenticator code:')
 
         hbox = QHBoxLayout()
-        msg = _('Then, enter your Google Authenticator code:')
         hbox.addWidget(QLabel(msg))
         pw = AmountEdit(None, is_int = True)
         pw.setFocus(True)
@@ -692,14 +705,13 @@ class Plugin(BasePlugin):
         vbox.addLayout(Buttons(CancelButton(window), b))
         pw.textChanged.connect(lambda: b.setEnabled(len(pw.text())==6))
 
-        window.exec_()
-        otp = pw.get_amount()
-        try:
-            server.auth(_id, otp)
-        except:
-            self.window.show_message('Incorrect password, aborting')
-            return
-
-        return True
-
-
+        while True:
+            if not window.exec_():
+                return False
+            otp = pw.get_amount()
+            try:
+                server.auth(_id, otp)
+                return True
+            except:
+                QMessageBox.information(self.window, _('Message'), _('Incorrect password'), _('OK'))
+                pw.setText('')

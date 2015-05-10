@@ -47,6 +47,7 @@ class TxDialog(QDialog):
         tx_dict = tx.as_dict()
         self.parent = parent
         self.wallet = parent.wallet
+        self.saved = True
 
         QDialog.__init__(self)
         self.setMinimumWidth(600)
@@ -57,7 +58,9 @@ class TxDialog(QDialog):
         self.setLayout(vbox)
 
         vbox.addWidget(QLabel(_("Transaction ID:")))
-        self.tx_hash_e  = QLineEdit()
+        self.tx_hash_e  = ButtonsLineEdit()
+        qr_show = lambda: self.parent.show_qrcode(str(self.tx_hash_e.text()), 'Transaction ID')
+        self.tx_hash_e.addButton(":icons/qrcode.png", qr_show, _("Show as QR code"))
         self.tx_hash_e.setReadOnly(True)
         vbox.addWidget(self.tx_hash_e)
         self.status_label = QLabel()
@@ -78,26 +81,37 @@ class TxDialog(QDialog):
         b.clicked.connect(self.sign)
 
         self.broadcast_button = b = QPushButton(_("Broadcast"))
-        b.clicked.connect(lambda: self.parent.broadcast_transaction(self.tx))
+        b.clicked.connect(self.do_broadcast)
         b.hide()
 
         self.save_button = b = QPushButton(_("Save"))
         b.clicked.connect(self.save)
 
         self.cancel_button = b = QPushButton(_("Close"))
-        b.clicked.connect(lambda: self.done(0))
+        b.clicked.connect(self.close)
         b.setDefault(True)
 
         self.qr_button = b = QPushButton()
         b.setIcon(QIcon(":icons/qrcode.png"))
         b.clicked.connect(self.show_qr)
 
-        self.buttons = [self.qr_button, self.sign_button, self.broadcast_button, self.save_button, self.cancel_button]
+        self.copy_button = CopyButton(lambda: str(self.tx), self.parent.app)
+
+        self.buttons = [self.copy_button, self.qr_button, self.sign_button, self.broadcast_button, self.save_button, self.cancel_button]
         run_hook('transaction_dialog', self)
 
         vbox.addLayout(Buttons(*self.buttons))
         self.update()
 
+    def do_broadcast(self):
+        self.parent.broadcast_transaction(self.tx)
+        self.saved = True
+
+    def close(self):
+        if not self.saved:
+            if QMessageBox.question(self, _('Message'), _('This transaction is not saved. Close anyway?'), QMessageBox.Yes | QMessageBox.No, QMessageBox.No) == QMessageBox.No:
+                return
+        self.done(0)
 
     def show_qr(self):
         text = self.tx.raw.decode('hex')
@@ -120,12 +134,12 @@ class TxDialog(QDialog):
             with open(fileName, "w+") as f:
                 f.write(json.dumps(self.tx.as_dict(),indent=4) + '\n')
             self.show_message(_("Transaction saved successfully"))
-
+            self.saved = True
 
 
     def update(self):
-
-        is_relevant, is_mine, v, fee = self.wallet.get_tx_value(self.tx)
+        is_relevant, is_mine, v, fee = self.wallet.get_wallet_delta(self.tx)
+        tx_hash = self.tx.hash()
         if self.wallet.can_sign(self.tx):
             self.sign_button.show()
         else:
@@ -133,10 +147,9 @@ class TxDialog(QDialog):
 
         if self.tx.is_complete():
             status = _("Signed")
-            tx_hash = self.tx.hash()
 
             if tx_hash in self.wallet.transactions.keys():
-                conf, timestamp = self.wallet.verifier.get_confirmations(tx_hash)
+                conf, timestamp = self.wallet.get_confirmations(tx_hash)
                 if timestamp:
                     time_str = datetime.datetime.fromtimestamp(timestamp).isoformat(' ')[:-3]
                 else:
@@ -165,6 +178,7 @@ class TxDialog(QDialog):
 
         # if we are not synchronized, we cannot tell
         if self.parent.network is None or not self.parent.network.is_running() or not self.parent.network.is_connected():
+            self.broadcast_button.hide()  # cannot broadcast when offline
             return
         if not self.wallet.up_to_date:
             return
@@ -172,10 +186,10 @@ class TxDialog(QDialog):
         if is_relevant:
             if is_mine:
                 if fee is not None:
-                    self.amount_label.setText(_("Amount sent:")+' %s'% self.parent.format_amount(v-fee) + ' ' + self.parent.base_unit())
-                    self.fee_label.setText(_("Transaction fee")+': %s'% self.parent.format_amount(fee) + ' ' + self.parent.base_unit())
+                    self.amount_label.setText(_("Amount sent:")+' %s'% self.parent.format_amount(-v+fee) + ' ' + self.parent.base_unit())
+                    self.fee_label.setText(_("Transaction fee")+': %s'% self.parent.format_amount(-fee) + ' ' + self.parent.base_unit())
                 else:
-                    self.amount_label.setText(_("Amount sent:")+' %s'% self.parent.format_amount(v) + ' ' + self.parent.base_unit())
+                    self.amount_label.setText(_("Amount sent:")+' %s'% self.parent.format_amount(-v) + ' ' + self.parent.base_unit())
                     self.fee_label.setText(_("Transaction fee")+': '+ _("unknown"))
             else:
                 self.amount_label.setText(_("Amount received:")+' %s'% self.parent.format_amount(v) + ' ' + self.parent.base_unit())
@@ -192,27 +206,48 @@ class TxDialog(QDialog):
             vbox.addWidget(QLabel("LockTime: %d\n" % self.tx.locktime))
 
         vbox.addWidget(QLabel(_("Inputs")))
-        def format_input(x):
-            if x.get('is_coinbase'):
-                return 'coinbase'
-            else:
-                _hash = x.get('prevout_hash')
-                return _hash[0:8] + '...' + _hash[-8:] + ":%d"%x.get('prevout_n') + u'\t' + "%s"%x.get('address')
-        lines = map(format_input, self.tx.inputs )
+
+        ext = QTextCharFormat()
+        own = QTextCharFormat()
+        own.setBackground(QBrush(QColor("lightgreen")))
+        own.setToolTip(_("Own address"))
+
         i_text = QTextEdit()
         i_text.setFont(QFont(MONOSPACE_FONT))
-        i_text.setText('\n'.join(lines))
         i_text.setReadOnly(True)
         i_text.setMaximumHeight(100)
-        vbox.addWidget(i_text)
+        cursor = i_text.textCursor()
+        for x in self.tx.inputs:
+            if x.get('is_coinbase'):
+                cursor.insertText('coinbase')
+            else:
+                prevout_hash = x.get('prevout_hash')
+                prevout_n = x.get('prevout_n')
+                cursor.insertText(prevout_hash[0:8] + '...' + prevout_hash[-8:] + ":%d"%prevout_n, ext)
+                cursor.insertText('\t')
+                addr = x.get('address')
+                if addr == "(pubkey)":
+                    _addr = self.wallet.find_pay_to_pubkey_address(prevout_hash, prevout_n)
+                    if _addr:
+                        addr = _addr
+                if addr is None:
+                    addr = _('unknown')
+                cursor.insertText(addr, own if self.wallet.is_mine(addr) else ext)
+            cursor.insertBlock()
 
+        vbox.addWidget(i_text)
         vbox.addWidget(QLabel(_("Outputs")))
-        lines = map(lambda x: x[0] + u'\t\t' + self.parent.format_amount(x[1]) if x[1] else x[0], self.tx.get_outputs())
         o_text = QTextEdit()
         o_text.setFont(QFont(MONOSPACE_FONT))
-        o_text.setText('\n'.join(lines))
         o_text.setReadOnly(True)
         o_text.setMaximumHeight(100)
+        cursor = o_text.textCursor()
+        for addr, v in self.tx.get_outputs():
+            cursor.insertText(addr, own if self.wallet.is_mine(addr) else ext)
+            if v is not None:
+                cursor.insertText('\t', ext)
+                cursor.insertText(self.parent.format_amount(v), ext)
+            cursor.insertBlock()
         vbox.addWidget(o_text)
 
 

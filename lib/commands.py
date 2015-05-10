@@ -146,7 +146,7 @@ class Commands:
         return self.network.synchronous_get([ ('blockchain.address.get_history',[addr]) ])[0]
 
     def listunspent(self):
-        l = copy.deepcopy(self.wallet.get_unspent_coins())
+        l = copy.deepcopy(self.wallet.get_spendable_coins())
         for i in l: i["value"] = str(Decimal(i["value"])/100000000)
         return l
 
@@ -159,7 +159,7 @@ class Commands:
             return {'address':r[0] }
 
     def createrawtransaction(self, inputs, outputs):
-        coins = self.wallet.get_unspent_coins(None)
+        coins = self.wallet.get_spendable_coins(None)
         tx_inputs = []
         for i in inputs:
             prevout_hash = i['txid']
@@ -176,22 +176,22 @@ class Commands:
         return tx
 
     def signtxwithkey(self, raw_tx, sec):
-        tx = Transaction.deserialize(raw_tx)
+        tx = Transaction(raw_tx)
         pubkey = bitcoin.public_key_from_private_key(sec)
         tx.sign({ pubkey:sec })
         return tx
 
     def signtxwithwallet(self, raw_tx):
-        tx = Transaction.deserialize(raw_tx)
+        tx = Transaction(raw_tx)
         self.wallet.sign_transaction(tx, self.password)
         return tx
 
     def decoderawtransaction(self, raw):
-        tx = Transaction.deserialize(raw)
+        tx = Transaction(raw)
         return {'inputs':tx.inputs, 'outputs':tx.outputs}
 
     def sendrawtransaction(self, raw):
-        tx = Transaction.deserialize(raw)
+        tx = Transaction(raw)
         return self.network.synchronous_get([('blockchain.transaction.broadcast', [str(tx)])])[0]
 
     def createmultisig(self, num, pubkeys):
@@ -231,12 +231,14 @@ class Commands:
 
     def getbalance(self, account= None):
         if account is None:
-            c, u = self.wallet.get_balance()
+            c, u, x = self.wallet.get_balance()
         else:
-            c, u = self.wallet.get_account_balance(account)
-
-        out = { "confirmed": str(Decimal(c)/100000000) }
-        if u: out["unconfirmed"] = str(Decimal(u)/100000000)
+            c, u, x = self.wallet.get_account_balance(account)
+        out = {"confirmed": str(Decimal(c)/100000000)}
+        if u:
+            out["unconfirmed"] = str(Decimal(u)/100000000)
+        if x:
+            out["unmatured"] = str(Decimal(x)/100000000)
         return out
 
     def getaddressbalance(self, addr):
@@ -342,8 +344,8 @@ class Commands:
     def history(self):
         balance = 0
         out = []
-        for item in self.wallet.get_tx_history():
-            tx_hash, conf, is_mine, value, fee, balance, timestamp = item
+        for item in self.wallet.get_history():
+            tx_hash, conf, value, timestamp, balance = item
             try:
                 time_str = datetime.datetime.fromtimestamp( timestamp).isoformat(' ')[:-3]
             except Exception:
@@ -403,7 +405,7 @@ class Commands:
 
         raw = self.network.synchronous_get([ ('blockchain.transaction.get',[tx_hash]) ])[0]
         if raw:
-            return Transaction.deserialize(raw)
+            return Transaction(raw)
         else:
             return "unknown transaction"
 

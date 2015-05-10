@@ -1,4 +1,5 @@
 import ast
+import json
 import threading
 import os
 
@@ -70,14 +71,12 @@ class SimpleConfig(object):
         # update the current options with the command line options last (to
         # override both others).
         self.read_only_options.update(options)
-
         # init path
         self.init_path()
-
         # user config.
         self.user_config = read_user_config_function(self.path)
-
-        set_config(self)  # Make a singleton instance of 'self'
+        # Make a singleton instance of 'self'
+        set_config(self)
 
     def init_path(self):
         # Read electrum path in the command line configuration
@@ -103,7 +102,6 @@ class SimpleConfig(object):
             self.user_config[key] = value
             if save:
                 self.save_user_config()
-
         return
 
     def get(self, key, default=None):
@@ -122,16 +120,45 @@ class SimpleConfig(object):
         return True
 
     def save_user_config(self):
-        if not self.path: return
-
+        if not self.path:
+            return
         path = os.path.join(self.path, "config")
-        s = repr(self.user_config)
-        f = open(path,"w")
-        f.write( s )
+        s = json.dumps(self.user_config, indent=4, sort_keys=True)
+        f = open(path, "w")
+        f.write(s)
         f.close()
         if self.get('gui') != 'android':
             import stat
             os.chmod(path, stat.S_IREAD | stat.S_IWRITE)
+
+    def get_wallet_path(self):
+        """Set the path of the wallet."""
+
+        # command line -w option
+        path = self.get('wallet_path')
+        if path:
+            return path
+
+        # path in config file
+        path = self.get('default_wallet_path')
+        if path and os.path.exists(path):
+            return path
+
+        # default path
+        dirpath = os.path.join(self.path, "wallets")
+        if not os.path.exists(dirpath):
+            os.mkdir(dirpath)
+
+        new_path = os.path.join(self.path, "wallets", "default_wallet")
+
+        # default path in pre 1.9 versions
+        old_path = os.path.join(self.path, "electrum.dat")
+        if os.path.exists(old_path) and not os.path.exists(new_path):
+            os.rename(old_path, new_path)
+
+        return new_path
+
+
 
 def read_system_config(path=SYSTEM_CONFIG_PATH):
     """Parse and return the system config settings in /etc/electrum.conf."""
@@ -155,22 +182,23 @@ def read_system_config(path=SYSTEM_CONFIG_PATH):
 
 def read_user_config(path):
     """Parse and store the user config settings in electrum.conf into user_config[]."""
-    if not path: return {}  # Return a dict, since we will call update() on it.
-
+    if not path:
+        return {}
     config_path = os.path.join(path, "config")
-    result = {}
-    if os.path.exists(config_path):
+    try:
+        with open(config_path, "r") as f:
+            data = f.read()
+    except IOError:
+        print_msg("Error: Cannot read config file.")
+        return {}
+    try:
+        result = json.loads(data)
+    except:
         try:
-
-            with open(config_path, "r") as f:
-                data = f.read()
-            result = ast.literal_eval( data )  #parse raw data from reading wallet file
-
-        except Exception:
+            result = ast.literal_eval(data)
+        except:
             print_msg("Error: Cannot read config file.")
-            result = {}
-
-        if not type(result) is dict:
             return {}
-
+    if not type(result) is dict:
+        return {}
     return result
