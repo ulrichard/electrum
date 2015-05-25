@@ -6,15 +6,16 @@ from struct import pack,unpack
 from sys import stderr
 from time import sleep
 from base64 import b64encode, b64decode
+import threading
 
 import electrum
-from electrum_gui.qt.password_dialog import make_password_dialog, run_password_dialog
 from electrum.account import BIP32_Account
 from electrum.bitcoin import EncodeBase58Check, DecodeBase58Check, public_key_to_bc_address, bc_address_to_hash_160
 from electrum.i18n import _
-from electrum.plugins import BasePlugin, hook
+from electrum.plugins import BasePlugin, hook, always_hook, run_hook
 from electrum.transaction import deserialize
 from electrum.wallet import BIP32_HD_Wallet
+from electrum.util import print_error
 
 from electrum.util import format_satoshis
 import hashlib
@@ -33,25 +34,21 @@ try:
 except ImportError:
     BTCHIP = False
 
+
 class Plugin(BasePlugin):
-
-    def fullname(self):
-        return 'BTChip Wallet'
-
-    def description(self):
-        return 'Provides support for BTChip hardware wallet\n\nRequires github.com/btchip/btchip-python'
 
     def __init__(self, gui, name):
         BasePlugin.__init__(self, gui, name)
         self._is_available = self._init()
         self.wallet = None
-        if self._is_available:
-            electrum.wallet.wallet_types.append(('hardware', 'btchip', _("BTChip wallet"), BTChipWallet))
+
+    def constructor(self, s):
+        return BTChipWallet(s)
 
     def _init(self):
         return BTCHIP
 
-    def is_available(self):        
+    def is_available(self):
         if not self._is_available:
             return False
         if not self.wallet:
@@ -70,9 +67,6 @@ class Plugin(BasePlugin):
             return False
         return True
 
-    def enable(self):
-        return BasePlugin.enable(self)
-
     def btchip_is_connected(self):
         try:
             self.wallet.get_client().getFirmwareVersion()
@@ -81,7 +75,16 @@ class Plugin(BasePlugin):
         return True
 
     @hook
+    def add_plugin(self, wallet):
+        wallet.plugin = self
+
+    @hook
+    def init_qt_app(self, app):
+        self.handler = BTChipQtHandler(app)
+
+    @hook
     def load_wallet(self, wallet):
+        self.wallet = wallet
         if self.btchip_is_connected():
             if not self.wallet.check_proper_device():
                 QMessageBox.information(self.window, _('Error'), _("This wallet does not match your BTChip device"), _('OK'))
@@ -122,20 +125,28 @@ class BTChipWallet(BIP32_HD_Wallet):
         self.device_checked = False
         self.signing = False
         self.force_watching_only = False
+        always_hook('add_plugin', self)
 
     def give_error(self, message, clear_client = False):
         if not self.signing:
-            QMessageBox.warning(QDialog(), _('Warning'), _(message), _('OK'))
+#            QMessageBox.warning(QDialog(), _('Warning'), _(message), _('OK'))
+            print_error(message)
         else:
             self.signing = False
         if clear_client and self.client is not None:
             self.client.bad = True
             self.device_checked = False
-        raise Exception(message)                
+        raise Exception(message)     
 
     def get_action(self):
         if not self.accounts:
             return 'create_accounts'
+
+    def can_import(self):
+        return False
+
+    def can_export(self):
+        return False
 
     def can_create_accounts(self):
         return True
@@ -187,8 +198,8 @@ class BTChipWallet(BIP32_HD_Wallet):
                         msg = "Enter your BTChip PIN - remaining attempts : " + str(remaining_attempts)
                     else:
                         msg = "Enter your BTChip PIN - WARNING : LAST ATTEMPT. If the PIN is not correct, the dongle will be wiped."
-                    confirmed, p, pin = self.password_dialog(msg)                
-                    if not confirmed:
+                    pin = self.password_dialog(msg)                
+                    if pin is None:
                         aborted = True
                         raise Exception('Aborted by user - please unplug the dongle and plug it again before retrying')
                     pin = pin.encode()                   
@@ -239,7 +250,7 @@ class BTChipWallet(BIP32_HD_Wallet):
         # S-L-O-W - we don't handle the fingerprint directly, so compute it manually from the previous node        
         # This only happens once so it's bearable
         self.get_client() # prompt for the PIN before displaying the dialog if necessary        
-        waitDialog.start("Computing master public key")
+#        waitDialog.start("Computing master public key")
         try:            
             splitPath = bip32_path.split('/')
             fingerprint = 0        
@@ -261,8 +272,8 @@ class BTChipWallet(BIP32_HD_Wallet):
             xpub = "0488B21E".decode('hex') + chr(depth) + self.i4b(fingerprint) + self.i4b(childnum) + str(nodeData['chainCode']) + str(publicKey)
         except Exception, e:
             self.give_error(e, True)
-        finally:
-            waitDialog.emit(SIGNAL('dongle_done'))
+#        finally:
+#            waitDialog.emit(SIGNAL('dongle_done'))
 
         return EncodeBase58Check(xpub)
 
@@ -291,15 +302,15 @@ class BTChipWallet(BIP32_HD_Wallet):
         if not self.check_proper_device():
             self.give_error('Wrong device or password')        
         address_path = self.address_id(address)
-        waitDialog.start("Signing Message ...")
+#        waitDialog.start("Signing Message ...")
         try:
             info = self.get_client().signMessagePrepare(address_path, message)
             pin = ""
             if info['confirmationNeeded']:                
                 # TODO : handle different confirmation types. For the time being only supports keyboard 2FA
                 use2FA = True
-                confirmed, p, pin = self.password_dialog()
-                if not confirmed:
+                pin = self.password_dialog()
+                if pin is None:
                     raise Exception('Aborted by user')
                 pin = pin.encode()
                 self.client.bad = True
@@ -313,9 +324,9 @@ class BTChipWallet(BIP32_HD_Wallet):
                 self.give_error(e, True)            
         except Exception, e:
             self.give_error(e, True)
-        finally:
-            if waitDialog.waiting:
-                waitDialog.emit(SIGNAL('dongle_done'))
+#        finally:
+#            if waitDialog.waiting:
+#                waitDialog.emit(SIGNAL('dongle_done'))
         self.client.bad = use2FA
         self.signing = False
 
@@ -383,7 +394,7 @@ class BTChipWallet(BIP32_HD_Wallet):
         if not self.check_proper_device():
             self.give_error('Wrong device or password')
 
-        waitDialog.start("Signing Transaction ...")
+#        waitDialog.start("Signing Transaction ...")
         try:
             # Get trusted inputs from the original transactions
             for utxo in inputs:
@@ -404,15 +415,15 @@ class BTChipWallet(BIP32_HD_Wallet):
                 if outputData['confirmationNeeded']:                
                     use2FA = True
                     # TODO : handle different confirmation types. For the time being only supports keyboard 2FA
-                    waitDialog.emit(SIGNAL('dongle_done'))
-                    confirmed, p, pin = self.password_dialog()
-                    if not confirmed:
+#                    waitDialog.emit(SIGNAL('dongle_done'))
+                    pin = self.password_dialog()
+                    if pin is None:
                         raise Exception('Aborted by user')
                     pin = pin.encode()
                     self.client.bad = True
                     self.device_checked = False
                     self.get_client(True)
-                    waitDialog.start("Signing ...")
+#                    waitDialog.start("Signing ...")
                 else:
                     # Sign input with the provided PIN
                     inputSignature = self.get_client().untrustedHashSign(inputsPaths[inputIndex],
@@ -423,9 +434,9 @@ class BTChipWallet(BIP32_HD_Wallet):
                 firstTransaction = False
         except Exception, e:
             self.give_error(e, True)
-        finally:
-            if waitDialog.waiting:
-                waitDialog.emit(SIGNAL('dongle_done'))
+#        finally:
+#            if waitDialog.waiting:
+#                waitDialog.emit(SIGNAL('dongle_done'))
 
         # Reformat transaction
         inputIndex = 0
@@ -443,13 +454,13 @@ class BTChipWallet(BIP32_HD_Wallet):
     def check_proper_device(self):
         pubKey = DecodeBase58Check(self.master_public_keys["x/0'"])[45:]
         if not self.device_checked:
-            waitDialog.start("Checking device")
+#            waitDialog.start("Checking device")
             try:
                 nodeData = self.get_client().getWalletPublicKey("44'/0'/0'")
             except Exception, e:
                 self.give_error(e, True)
-            finally:
-                waitDialog.emit(SIGNAL('dongle_done'))
+#            finally:
+#                waitDialog.emit(SIGNAL('dongle_done'))
             pubKeyDevice = compress_public_key(nodeData['publicKey'])
             self.device_checked = True
             if pubKey != pubKeyDevice:
@@ -467,35 +478,81 @@ class BTChipWallet(BIP32_HD_Wallet):
                     "It should show itself to your computer as a keyboard and output the second factor along with a summary of the transaction it is signing into the text-editor.\r\n\r\n" \
                     "Check that summary and then enter the second factor code here.\r\n" \
                     "Before clicking OK, re-plug the device once more (unplug it and plug it again if you read the second factor code on the same computer)")
-        d = QDialog()
-        d.setModal(1)
-        d.setLayout( make_password_dialog(d, None, msg, False) )
-        return run_password_dialog(d, None, None)
+        print(msg)
+        return self.handler.get_passphrase(msg)
 
-class DongleWaitingDialog(QThread):
-    def __init__(self):
-        QThread.__init__(self)
-        self.waiting = False
+#class DongleWaitingDialog(QThread):
+#    def __init__(self):
+#        QThread.__init__(self)
+#        self.waiting = False
 
-    def start(self, message):
-        self.d = QDialog()
-        self.d.setModal(1)
-        self.d.setWindowTitle('Please Wait')
-        self.d.setWindowFlags(self.d.windowFlags() | QtCore.Qt.WindowStaysOnTopHint)
-        l = QLabel(message)
-        vbox = QVBoxLayout(self.d)
-        vbox.addWidget(l)
-        self.d.show()
-        if not self.waiting:
-            self.waiting = True
-            self.d.connect(waitDialog, SIGNAL('dongle_done'), self.stop)
+#    def start(self, message):
+#        self.d = QDialog()
+#        self.d.setModal(1)
+#        self.d.setWindowTitle('Please Wait')
+#        self.d.setWindowFlags(self.d.windowFlags() | QtCore.Qt.WindowStaysOnTopHint)
+#        l = QLabel(message)
+#        vbox = QVBoxLayout(self.d)
+#        vbox.addWidget(l)
+#        self.d.show()
+#        if not self.waiting:
+#            self.waiting = True
+#            self.d.connect(waitDialog, SIGNAL('dongle_done'), self.stop)
 
     def stop(self):
         self.d.hide()
         self.waiting = False
 
+
+class BTChipQtHandler:
+
+    def __init__(self, win):
+        self.win = win
+        self.win.connect(win, SIGNAL('btchip_done'), self.dialog_stop)
+        self.win.connect(win, SIGNAL('message_dialog'), self.message_dialog)
+        self.win.connect(win, SIGNAL('passphrase_dialog'), self.passphrase_dialog)
+        self.done = threading.Event()
+
+    def stop(self):
+        self.win.emit(SIGNAL('btchip_done'))
+
+    def show_message(self, msg):
+        self.message = msg
+        self.win.emit(SIGNAL('message_dialog'))
+
+    def get_passphrase(self, msg):
+        self.done.clear()
+        self.message = msg
+        self.win.emit(SIGNAL('passphrase_dialog'))
+        self.done.wait()
+        return self.passphrase
+
+    def passphrase_dialog(self):
+        from electrum_gui.qt.password_dialog import make_password_dialog, run_password_dialog
+        d = QDialog()
+        d.setModal(1)
+        d.setLayout(make_password_dialog(d, None, self.message, False))
+        confirmed, p, passphrase = run_password_dialog(d, None, None)
+        if not confirmed:
+            QMessageBox.critical(None, _('Error'), _("Password request canceled"), _('OK'))
+            self.passphrase = None
+        self.done.set()
+
+    def message_dialog(self):
+        self.d = QDialog()
+        self.d.setModal(1)
+        self.d.setWindowTitle('Please Check BTChip Device')
+        self.d.setWindowFlags(self.d.windowFlags() | QtCore.Qt.WindowStaysOnTopHint)
+        l = QLabel(self.message)
+        vbox = QVBoxLayout(self.d)
+        vbox.addWidget(l)
+        self.d.show()
+
+    def dialog_stop(self):
+        self.d.hide()
+
 if BTCHIP:
-    waitDialog = DongleWaitingDialog()
+#    waitDialog = DongleWaitingDialog()
 
     # Tickle the UI a bit while waiting
     class DongleWaitQT(DongleWait):
