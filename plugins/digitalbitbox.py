@@ -97,7 +97,6 @@ class Plugin(BasePlugin):
         while True:
             
             action = digibox_dialog_install.restore_or_load()
-            print action
             if action == None:
                 return
             
@@ -214,8 +213,6 @@ class DigiboxWallet(BIP32_HD_Wallet):
 
 
     def check_proper_device(self):
-        print ''
-        print 'debug check proper device'
         xpub0 = self.master_public_keys["x/0'"]
         if not self.device_checked:
             try:
@@ -313,8 +310,12 @@ class DigiboxWallet(BIP32_HD_Wallet):
             
             self.hid_open()
             self.hid_device.write('\0' + bytearray(msg) + '\0'*(digibox_report_buf_size-len(msg))) 
-            r = self.hid_device.read(digibox_report_buf_size)
-            self.hid_close()
+            
+	    r = []
+            while len(r) < digibox_report_buf_size:    
+                r = r + self.hid_device.read(digibox_report_buf_size)
+
+	    self.hid_close()
             
             r = str(bytearray(r)).rstrip(' \t\r\n\0')
             reply = json.loads(r)
@@ -399,10 +400,8 @@ class DigiboxWallet(BIP32_HD_Wallet):
             
             for i, txout in enumerate(tx.outputs):
                 addr = tx.outputs[i][1]
-                #print addr
                 if self.is_change(addr):
                     change_keypath = self.address_id(addr)
-                    #print change_keypath
             
             require_pass = True;
             for i, txin in enumerate(tx.inputs):
@@ -489,7 +488,6 @@ class DigiboxWallet(BIP32_HD_Wallet):
                         msg = EncodeAES(secret,msg)
             
             wait_msg = "Processing command, please wait."
-            print msg_l
             '''
             if 'password' in msg_l:
                 wait_msg = "Press the touch button to change the password."
@@ -498,12 +496,13 @@ class DigiboxWallet(BIP32_HD_Wallet):
             '''
             if 'reset' in msg_l:
                 wait_msg = "Press the touch button 3 times to erase."
-            print 'tmeppp'
 
             
             digibox_dialog_wait.start_wait(_(wait_msg))
             self.hid_device.write('\0' + bytearray(msg) + '\0' * (digibox_report_buf_size - len(msg))) 
-            r = self.hid_device.read(digibox_report_buf_size)
+	    r = []
+            while len(r) < digibox_report_buf_size:    
+	        r = r + self.hid_device.read(digibox_report_buf_size)
             r = str(bytearray(r)).rstrip(' \t\r\n\0')
             reply = json.loads(r)
             digibox_dialog_wait.finish_wait()
@@ -519,11 +518,13 @@ class DigiboxWallet(BIP32_HD_Wallet):
                 #echo = DecodeAES(secret, ''.join(reply["echo"]))
                 if debug:
                     print "Echo:  " + echo
-                    #print echo
                 digibox_dialog_wait.start_wait_echo(echo)
                 self.hid_device.write('\0' + bytearray(msg) + '\0' * (digibox_report_buf_size - len(msg))) 
-                r = self.hid_device.read(digibox_report_buf_size)
-                r = str(bytearray(r)).rstrip(' \t\r\n\0')
+	        r = []
+                while len(r) < digibox_report_buf_size:    
+	            r = r + self.hid_device.read(digibox_report_buf_size)
+                    
+		r = str(bytearray(r)).rstrip(' \t\r\n\0')
                 reply = json.loads(r)
                 digibox_dialog_wait.finish_wait()
             
@@ -577,13 +578,11 @@ class DigiboxWallet(BIP32_HD_Wallet):
 
     
     def hid_open(self):
-        #print "Opening Digital Bitbox"
         self.hid_device = hid.device()
         self.hid_device.open(0x03eb, 0x2402)
 
 
     def hid_close(self):
-        #print "Closing Digital Bitbox"
         self.hid_device.close()
 
 
