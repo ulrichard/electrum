@@ -2,6 +2,7 @@ import os, sys, re, json
 import platform
 import shutil
 from datetime import datetime
+from decimal import Decimal
 import urlparse
 import urllib
 import threading
@@ -44,7 +45,10 @@ class DaemonThread(threading.Thread):
             self.running = False
 
     def print_error(self, *msg):
-        print_error("[%s]"%self.__class__.__name__, *msg)
+        print_error("[%s]" % self.__class__.__name__, *msg)
+
+    def print_msg(self, *msg):
+        print_msg("[%s]" % self.__class__.__name__, *msg)
 
 
 
@@ -104,8 +108,11 @@ def user_dir():
         #raise Exception("No home directory found in environment variables.")
         return
 
-
-
+def format_satoshis_plain(x, decimal_point = 8):
+    '''Display a satoshi amount scaled.  Always uses a '.' as a decimal
+    point and has no thousands separator'''
+    scale_factor = pow(10, decimal_point)
+    return "{:.8f}".format(Decimal(x) / scale_factor).rstrip('0').rstrip('.')
 
 def format_satoshis(x, is_diff=False, num_zeros = 0, decimal_point = 8, whitespaces=False):
     from locale import localeconv
@@ -127,7 +134,7 @@ def format_satoshis(x, is_diff=False, num_zeros = 0, decimal_point = 8, whitespa
     if whitespaces:
         result += " " * (decimal_point - len(fract_part))
         result = " " * (15 - len(result)) + result
-    return result
+    return result.decode('utf8')
 
 def format_time(timestamp):
     import datetime
@@ -221,7 +228,7 @@ def block_explorer_URL(config, kind, item):
 
 def parse_URI(uri):
     import bitcoin
-    from decimal import Decimal
+    from bitcoin import COIN
 
     if ':' not in uri:
         assert bitcoin.is_address(uri)
@@ -251,7 +258,7 @@ def parse_URI(uri):
             k = int(m.group(2)) - 8
             amount = Decimal(m.group(1)) * pow(  Decimal(10) , k)
         else:
-            amount = Decimal(am) * 100000000
+            amount = Decimal(am) * COIN
     if 'message' in pq:
         message = pq['message'][0].decode('utf8')
     if 'label' in pq:
@@ -273,7 +280,7 @@ def create_URI(addr, amount, message):
         return ""
     query = []
     if amount:
-        query.append('amount=%s'%format_satoshis(amount))
+        query.append('amount=%s'%format_satoshis_plain(amount))
     if message:
         if type(message) == unicode:
             message = message.encode('utf8')
@@ -356,8 +363,7 @@ class SocketPipe:
                 traceback.print_exc(file=sys.stderr)
                 data = ''
 
-            if not data:
-                self.socket.close()
+            if not data:  # Connection closed remotely
                 return None
             self.message += data
             self.recv_time = time.time()
@@ -458,3 +464,24 @@ class StoreDict(dict):
         if key in self.keys():
             dict.pop(self, key)
             self.save()
+
+
+import bitcoin
+from plugins import run_hook
+
+class Contacts(StoreDict):
+
+    def __init__(self, config):
+        StoreDict.__init__(self, config, 'contacts')
+
+    def resolve(self, k):
+        if bitcoin.is_address(k):
+            return {'address':k, 'type':'address'}
+        if k in self.keys():
+            _type, addr = self[k]
+            if _type == 'address':
+                return {'address':addr, 'type':'contact'}
+        out = run_hook('resolve_address', k)
+        if out:
+            return out
+        raise Exception("Invalid Bitcoin address or alias", k)

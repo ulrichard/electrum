@@ -14,13 +14,12 @@ from electrum.bitcoin import EncodeBase58Check, DecodeBase58Check, public_key_to
 from electrum.i18n import _
 from electrum.plugins import BasePlugin, hook
 from electrum.transaction import deserialize
-from electrum.wallet import BIP32_HD_Wallet
+from electrum.wallet import BIP32_HD_Wallet, BIP32_Wallet
 
-from electrum.util import format_satoshis
+from electrum.util import format_satoshis_plain
 import hashlib
 
 try:
-    from usb.core import USBError
     from btchip.btchipComm import getDongle, DongleWait
     from btchip.btchip import btchip
     from btchip.btchipUtils import compress_public_key,format_transaction, get_regular_input_script
@@ -29,24 +28,19 @@ try:
     from btchip.btchipFirmwareWizard import checkFirmware, updateFirmware
     from btchip.btchipException import BTChipException
     BTCHIP = True
-    BTCHIP_DEBUG = False
+    BTCHIP_DEBUG = False 
 except ImportError:
     BTCHIP = False
 
 class Plugin(BasePlugin):
 
-    def fullname(self):
-        return 'BTChip Wallet'
-
-    def description(self):
-        return 'Provides support for BTChip hardware wallet\n\nRequires github.com/btchip/btchip-python'
-
     def __init__(self, gui, name):
         BasePlugin.__init__(self, gui, name)
         self._is_available = self._init()
         self.wallet = None
-        if self._is_available:
-            electrum.wallet.wallet_types.append(('hardware', 'btchip', _("BTChip wallet"), BTChipWallet))
+
+    def constructor(self, s):
+        return BTChipWallet(s)
 
     def _init(self):
         return BTCHIP
@@ -70,9 +64,6 @@ class Plugin(BasePlugin):
             return False
         return True
 
-    def enable(self):
-        return BasePlugin.enable(self)
-
     def btchip_is_connected(self):
         try:
             self.wallet.get_client().getFirmwareVersion()
@@ -81,7 +72,9 @@ class Plugin(BasePlugin):
         return True
 
     @hook
-    def load_wallet(self, wallet):
+    def load_wallet(self, wallet, window):
+        self.wallet = wallet
+        self.window = window
         if self.btchip_is_connected():
             if not self.wallet.check_proper_device():
                 QMessageBox.information(self.window, _('Error'), _("This wallet does not match your BTChip device"), _('OK'))
@@ -138,7 +131,12 @@ class BTChipWallet(BIP32_HD_Wallet):
             return 'create_accounts'
 
     def can_create_accounts(self):
-        return True
+        return False
+
+    def synchronize(self):
+        # synchronize existing accounts
+        BIP32_Wallet.synchronize(self)
+        # no further accounts for the moment
 
     def can_change_password(self):
         return False
@@ -355,6 +353,7 @@ class BTChipWallet(BIP32_HD_Wallet):
         outputAmount = None
         use2FA = False
         pin = ""
+        rawTx = tx.serialize()
         # Fetch inputs of the transaction to sign
         for txinput in tx.inputs:
             if ('is_coinbase' in txinput and txinput['is_coinbase']):
@@ -397,21 +396,43 @@ class BTChipWallet(BIP32_HD_Wallet):
             while inputIndex < len(inputs):
                 self.get_client().startUntrustedTransaction(firstTransaction, inputIndex, 
                 trustedInputs, redeemScripts[inputIndex])
-                outputData = self.get_client().finalizeInput(output, format_satoshis(outputAmount), 
-                format_satoshis(self.get_tx_fee(tx)), changePath)
+                outputData = self.get_client().finalizeInput(output, format_satoshis_plain(outputAmount), 
+                format_satoshis_plain(self.get_tx_fee(tx)), changePath, bytearray(rawTx.decode('hex')))
                 if firstTransaction:
                     transactionOutput = outputData['outputData']
                 if outputData['confirmationNeeded']:                
                     use2FA = True
                     # TODO : handle different confirmation types. For the time being only supports keyboard 2FA
                     waitDialog.emit(SIGNAL('dongle_done'))
-                    confirmed, p, pin = self.password_dialog()
-                    if not confirmed:
-                        raise Exception('Aborted by user')
-                    pin = pin.encode()
-                    self.client.bad = True
-                    self.device_checked = False
-                    self.get_client(True)
+                    if 'keycardData' in outputData:
+                        pin2 = ""
+                        for keycardIndex in range(len(outputData['keycardData'])):
+                            msg = "Do not enter your device PIN here !\r\n\r\n" + \
+                                "Your BTChip wants to talk to you and tell you a unique second factor code.\r\n" + \
+                                "For this to work, please match the character between stars of the output address using your security card\r\n\r\n" + \
+                                "Output address : " 
+                            for index in range(len(output)):
+                                if index == outputData['keycardData'][keycardIndex]:
+                                    msg = msg + "*" + output[index] + "*"
+                                else:
+                                    msg = msg + output[index]
+                            msg = msg + "\r\n"                        
+                            confirmed, p, pin = self.password_dialog(msg)
+                            if not confirmed:
+                                raise Exception('Aborted by user') 
+                            try:
+                                pin2 = pin2 + chr(int(pin[0], 16))
+                            except:
+                                raise Exception('Invalid PIN character')
+                        pin = pin2
+                    else:
+                        confirmed, p, pin = self.password_dialog()
+                        if not confirmed:
+                            raise Exception('Aborted by user')                                            
+                        pin = pin.encode()
+                        self.client.bad = True
+                        self.device_checked = False
+                        self.get_client(True)
                     waitDialog.start("Signing ...")
                 else:
                     # Sign input with the provided PIN
@@ -503,16 +524,5 @@ if BTCHIP:
             self.dongle = dongle
 
         def waitFirstResponse(self, timeout):
-            customTimeout = 0
-            while customTimeout < timeout:
-                try:
-                    response = self.dongle.waitFirstResponse(200)
-                    return response
-                except USBError, e:
-                    if e.backend_error_code == -7:
-                        QApplication.processEvents()
-                        customTimeout = customTimeout + 100
-                        pass
-                    else:
-                        raise e
-            raise e
+	    return self.dongle.waitFirstResponse(timeout)
+

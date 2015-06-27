@@ -15,7 +15,7 @@ from amountedit import AmountEdit
 
 import sys
 import threading
-from electrum.plugins import always_hook
+from electrum.plugins import always_hook, run_hook
 from electrum.mnemonic import prepare_seed
 
 MSG_ENTER_ANYTHING    = _("Please enter a wallet seed, a master public key, a list of Bitcoin addresses, or a list of private keys")
@@ -28,8 +28,9 @@ MSG_VERIFY_SEED       = _("Your seed is important!") + "\n" + _("To make sure th
 
 class InstallWizard(QDialog):
 
-    def __init__(self, config, network, storage):
+    def __init__(self, config, network, storage, app):
         QDialog.__init__(self)
+        self.app = app
         self.config = config
         self.network = network
         self.storage = storage
@@ -241,7 +242,7 @@ class InstallWizard(QDialog):
         if b2.isChecked():
             return NetworkDialog(self.network, self.config, None).do_exec()
         else:
-            self.config.set_key('auto_cycle', True, True)
+            self.config.set_key('auto_connect', True, True)
             return
 
 
@@ -345,6 +346,9 @@ class InstallWizard(QDialog):
             # fixme: password is only needed for multiple accounts
             password = None
 
+        # load wallet in plugins
+        always_hook('installwizard_load_wallet', wallet, self)
+
         while action is not None:
             util.print_error("installwizard:", wallet, action)
 
@@ -447,9 +451,12 @@ class InstallWizard(QDialog):
                 wallet = Wallet.from_multisig(key_list, password, self.storage)
 
             else:
-                self.storage.put('wallet_type', t)
+                self.storage.put('wallet_type', t, False)
+                # call the constructor to load the plugin (side effect)
+                Wallet(self.storage)
                 wallet = always_hook('installwizard_restore', self, self.storage)
                 if not wallet:
+                    util.print_error("no wallet")
                     return
 
             # create first keys offline

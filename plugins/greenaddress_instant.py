@@ -17,9 +17,9 @@
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 
 import urllib
-import httplib
 import json
 import sys
+import requests
 
 from PyQt4.QtGui import QMessageBox, QApplication, QPushButton
 
@@ -31,18 +31,10 @@ from electrum.i18n import _
 from electrum.bitcoin import regenerate_key
 
 
-description = _("Allows validating if your transactions have instant confirmations by GreenAddress")
-
 
 class Plugin(BasePlugin):
 
     button_label = _("Verify GA instant")
-
-    def fullname(self):
-        return 'GreenAddress instant'
-
-    def description(self):
-        return description
 
     @hook 
     def init_qt(self, gui):
@@ -90,11 +82,9 @@ class Plugin(BasePlugin):
             sig = self.wallet.sign_message(addr, message, password)
 
             # 2. send the request
-            connection = httplib.HTTPSConnection('greenaddress.it')
-            connection.request("GET", ("/verify/?signature=%s&txhash=%s" % (urllib.quote(sig), tx.hash())),
-                None, {'User-Agent': 'Electrum'})
-            response = connection.getresponse()
-            response = json.loads(response.read())
+            response = requests.request("GET", ("https://greenaddress.it/verify/?signature=%s&txhash=%s" % (urllib.quote(sig), tx.hash())),
+                                        headers = {'User-Agent': 'Electrum'})
+            response = response.json()
 
             # 3. display the result
             if response.get('verified'):

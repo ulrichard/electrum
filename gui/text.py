@@ -1,10 +1,9 @@
 import curses, datetime, locale
 from decimal import Decimal
 _ = lambda x:x
-#from i18n import _
 from electrum.util import format_satoshis, set_verbosity
 from electrum.util import StoreDict
-from electrum.bitcoin import is_valid
+from electrum.bitcoin import is_valid, COIN
 
 from electrum import Wallet, WalletStorage
 
@@ -133,11 +132,11 @@ class ElectrumGui:
                 msg = _("Synchronizing...")
             else: 
                 c, u, x =  self.wallet.get_balance()
-                msg = _("Balance")+": %f  "%(Decimal(c) / 100000000)
+                msg = _("Balance")+": %f  "%(Decimal(c) / COIN)
                 if u:
-                    msg += "  [%f unconfirmed]"%(Decimal(u) / 100000000)
+                    msg += "  [%f unconfirmed]"%(Decimal(u) / COIN)
                 if x:
-                    msg += "  [%f unmatured]"%(Decimal(x) / 100000000)
+                    msg += "  [%f unmatured]"%(Decimal(x) / COIN)
         else:
             msg = _("Not connected")
             
@@ -297,12 +296,12 @@ class ElectrumGui:
             self.show_message(_('Invalid Bitcoin address'))
             return
         try:
-            amount = int( Decimal( self.str_amount) * 100000000 )
+            amount = int(Decimal(self.str_amount) * COIN)
         except Exception:
             self.show_message(_('Invalid Amount'))
             return
         try:
-            fee = int( Decimal( self.str_fee) * 100000000 )
+            fee = int(Decimal(self.str_fee) * COIN)
         except Exception:
             self.show_message(_('Invalid Fee'))
             return
@@ -352,8 +351,7 @@ class ElectrumGui:
 
     def network_dialog(self):
         if not self.network: return
-        auto_connect = self.network.config.get('auto_cycle')
-        host, port, protocol = self.network.default_server.split(':')
+        host, port, protocol, proxy_config, auto_connect = self.network.get_parameters()
         srv = 'auto-connect' if auto_connect else self.network.default_server
 
         out = self.run_dialog('Network', [
@@ -383,13 +381,13 @@ class ElectrumGui:
     def settings_dialog(self):
         out = self.run_dialog('Settings', [
             {'label':'Default GUI', 'type':'list', 'choices':['classic','lite','gtk','text'], 'value':self.config.get('gui')},
-            {'label':'Default fee', 'type':'satoshis', 'value': format_satoshis(self.wallet.fee).strip() }
+            {'label':'Default fee', 'type':'satoshis', 'value': format_satoshis(self.wallet.fee_per_kb).strip() }
             ], buttons = 1)
         if out:
             if out.get('Default GUI'):
                 self.config.set_key('gui', out['Default GUI'], True)
             if out.get('Default fee'):
-                fee = int ( Decimal( out['Default fee']) *10000000 )
+                fee = int(Decimal(out['Default fee']) * COIN)
                 self.config.set_key('fee_per_kb', fee, True)
 
 
@@ -429,8 +427,10 @@ class ElectrumGui:
                     value = '*'*len(item.get('value',''))
                 else:
                     value = ''
-
-                if len(value)<20: value += ' '*(20-len(value))
+                if value is None:
+                    value = ''
+                if len(value)<20:
+                    value += ' '*(20-len(value))
 
                 if item.has_key('value'):
                     w.addstr( 2+interval*i, 2, label)

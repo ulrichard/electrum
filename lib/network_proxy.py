@@ -16,20 +16,13 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 
-import socket
-import time
-import sys
-import os
 import threading
-import traceback
-import json
 import Queue
 
 import util
 from network import Network
-from util import print_error, print_stderr, parse_json
+from util import print_error
 from simple_config import SimpleConfig
-from daemon import NetworkServer
 from network import serialize_proxy, serialize_server
 
 
@@ -54,9 +47,9 @@ class NetworkProxy(util.DaemonThread):
             self.pipe = util.SocketPipe(socket)
             self.network = None
         else:
-            self.network = Network(config)
-            self.pipe = util.QueuePipe(send_queue=self.network.requests_queue)
-            self.network.start(self.pipe.get_queue)
+            self.pipe = util.QueuePipe()
+            self.network = Network(self.pipe, config)
+            self.network.start()
             for key in ['status','banner','updated','servers','interfaces']:
                 value = self.network.get_status_value(key)
                 self.pipe.get_queue.put({'method':'network.status', 'params':[key, value]})
@@ -209,7 +202,7 @@ class NetworkProxy(util.DaemonThread):
     def set_parameters(self, host, port, protocol, proxy, auto_connect):
         proxy_str = serialize_proxy(proxy)
         server_str = serialize_server(host, port, protocol)
-        self.config.set_key('auto_cycle', auto_connect, True)
+        self.config.set_key('auto_connect', auto_connect, True)
         self.config.set_key("proxy", proxy_str, True)
         self.config.set_key("server", server_str, True)
         # abort if changes were not allowed by config

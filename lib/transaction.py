@@ -24,6 +24,7 @@ import bitcoin
 from bitcoin import *
 from util import print_error
 import time
+import sys
 import struct
 
 #
@@ -494,6 +495,7 @@ class Transaction:
         self.inputs = d['inputs']
         self.outputs = [(x['type'], x['address'], x['value']) for x in d['outputs']]
         self.locktime = d['lockTime']
+        return d
 
     @classmethod
     def from_io(klass, inputs, outputs, locktime=0):
@@ -501,7 +503,6 @@ class Transaction:
         self.inputs = inputs
         self.outputs = outputs
         self.locktime = locktime
-        #self.raw = self.serialize()
         return self
 
     @classmethod
@@ -626,6 +627,10 @@ class Transaction:
 
         return script
 
+    def BIP_LI01_sort(self):
+        # See https://github.com/kristovatlas/rfc/blob/master/bips/bip-li01.mediawiki
+        self.inputs.sort(key = lambda i: (i['prevout_hash'], i['prevout_n']))
+        self.outputs.sort(key = lambda o: (o[2], self.pay_script(o[0], o[1])))
 
     def serialize(self, for_sig=None):
         inputs = self.inputs
@@ -705,13 +710,12 @@ class Transaction:
 
     def sign(self, keypairs):
         for i, txin in enumerate(self.inputs):
-            signatures = filter(None, txin['signatures'])
             num = txin['num_sig']
-            if len(signatures) == num:
-                # continue if this txin is complete
-                continue
-
             for x_pubkey in txin['x_pubkeys']:
+                signatures = filter(None, txin['signatures'])
+                if len(signatures) == num:
+                    # txin is complete
+                    break
                 if x_pubkey in keypairs.keys():
                     print_error("adding signature for", x_pubkey)
                     # add pubkey to txin
@@ -733,7 +737,6 @@ class Transaction:
                     assert public_key.verify_digest( sig, for_sig, sigdecode = ecdsa.util.sigdecode_der)
                     txin['signatures'][ii] = sig.encode('hex')
                     self.inputs[i] = txin
-
         print_error("is_complete", self.is_complete())
         self.raw = self.serialize()
 

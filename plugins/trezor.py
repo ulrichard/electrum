@@ -15,7 +15,7 @@ from electrum.i18n import _
 from electrum.plugins import BasePlugin, hook, always_hook, run_hook
 from electrum.transaction import deserialize
 from electrum.wallet import BIP32_HD_Wallet
-from electrum.util import print_error
+from electrum.util import print_error, print_msg
 from electrum.wallet import pw_decode, bip32_private_derivation, bip32_root
 
 from electrum_gui.qt.util import *
@@ -41,19 +41,15 @@ def give_error(message):
 
 class Plugin(BasePlugin):
 
-    def fullname(self):
-        return 'Trezor Wallet'
-
-    def description(self):
-        return 'Provides support for Trezor hardware wallet\n\nRequires github.com/trezor/python-trezor'
-
     def __init__(self, config, name):
         BasePlugin.__init__(self, config, name)
         self._is_available = self._init()
         self._requires_settings = True
         self.wallet = None
-        if self._is_available:
-            electrum.wallet.wallet_types.append(('hardware', 'trezor', _("Trezor wallet"), TrezorWallet))
+        self.handler = None
+
+    def constructor(self, s):
+        return TrezorWallet(s)
 
     def _init(self):
         return TREZOR
@@ -80,9 +76,6 @@ class Plugin(BasePlugin):
             return False
         return True
 
-    def enable(self):
-        return BasePlugin.enable(self)
-
     def trezor_is_connected(self):
         try:
             self.wallet.get_client().ping('t')
@@ -90,9 +83,6 @@ class Plugin(BasePlugin):
             return False
         return True
 
-    @hook
-    def add_plugin(self, wallet):
-        wallet.plugin = self
 
     @hook
     def close_wallet(self):
@@ -103,19 +93,33 @@ class Plugin(BasePlugin):
         self.wallet = None
 
     @hook
-    def init_qt_app(self, app):
-        self.handler = TrezorQtHandler(app)
+    def cmdline_load_wallet(self, wallet):
+        self.wallet = wallet
+        self.wallet.plugin = self
+        if self.handler is None:
+            self.handler = TrezorCmdLineHandler()
 
     @hook
-    def load_wallet(self, wallet):
+    def load_wallet(self, wallet, window):
+        self.print_error("load_wallet")
         self.wallet = wallet
+        self.window = window
+        self.wallet.plugin = self
+
+        if self.handler is None:
+            self.handler = TrezorQtHandler(self.window.app)
+
         if self.trezor_is_connected():
-            if not self.wallet.check_proper_device():
+            if self.wallet.addresses() and not self.wallet.check_proper_device():
                 QMessageBox.information(self.window, _('Error'), _("This wallet does not match your Trezor device"), _('OK'))
                 self.wallet.force_watching_only = True
         else:
             QMessageBox.information(self.window, _('Error'), _("Trezor device not detected.\nContinuing in watching-only mode."), _('OK'))
             self.wallet.force_watching_only = True
+
+    @hook
+    def installwizard_load_wallet(self, wallet, window):
+        self.load_wallet(wallet, window)
 
     @hook
     def installwizard_restore(self, wizard, storage):
@@ -190,7 +194,6 @@ class TrezorWallet(BIP32_HD_Wallet):
         self.mpk = None
         self.device_checked = False
         self.force_watching_only = False
-        always_hook('add_plugin', self)
 
     def get_action(self):
         if not self.accounts:
@@ -492,6 +495,27 @@ class TrezorGuiMixin(object):
         log("Enter one word of mnemonic: ")
         word = raw_input()
         return proto.WordAck(word=word)
+
+
+class TrezorCmdLineHandler:
+
+    def get_passphrase(self, msg):
+        import getpass
+        print_msg(msg)
+        return getpass.getpass('')
+
+    def get_pin(self, msg):
+        t = { 'a':'7', 'b':'8', 'c':'9', 'd':'4', 'e':'5', 'f':'6', 'g':'1', 'h':'2', 'i':'3'}
+        print_msg(msg)
+        print_msg("a b c\nd e f\ng h i\n-----")
+        o = raw_input()
+        return ''.join(map(lambda x: t[x], o))
+
+    def stop(self):
+        pass
+
+    def show_message(self, msg):
+        print_msg(msg)
 
 
 class TrezorQtHandler:
