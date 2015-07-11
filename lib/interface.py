@@ -72,6 +72,7 @@ class TcpInterface(threading.Thread):
         # parse server
         self.server = server
         self.host, self.port, self.protocol = self.server.split(':')
+        self.host = str(self.host)
         self.port = int(self.port)
         self.use_ssl = (self.protocol == 's')
 
@@ -227,7 +228,6 @@ class TcpInterface(threading.Thread):
                     try:
                         x = x509.X509()
                         x.parse(cert)
-                        x.slow_parse()
                     except:
                         traceback.print_exc(file=sys.stderr)
                         self.print_error("wrong certificate")
@@ -341,7 +341,6 @@ def check_cert(host, cert):
     try:
         x = x509.X509()
         x.parse(cert)
-        x.slow_parse()
     except:
         traceback.print_exc(file=sys.stdout)
         return

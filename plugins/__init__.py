@@ -34,7 +34,7 @@ descriptions = [
         'requires': [('btchip', 'github.com/btchip/btchip-python')],
         'requires_wallet_type': ['btchip'],
         'registers_wallet_type': ('hardware', 'btchip', _("BTChip wallet")),
-        'available_for': ['qt'],
+        'available_for': ['qt', 'cmdline'],
     },
     {
         'name': 'cosigner_pool',
@@ -45,6 +45,12 @@ descriptions = [
             _("Transactions are encrypted and stored on a remote server.")
         ]),
         'requires_wallet_type': ['2of2', '2of3'],
+        'available_for': ['qt'],
+    },
+    {
+        'name': 'email',
+        'fullname': 'Email',
+        'description': _("Send and receive payment request with an email account"),
         'available_for': ['qt'],
     },
     {
@@ -67,13 +73,6 @@ descriptions = [
             _("The label sync's server software is open-source as well and can be found on github.com/maran/electrum-sync-server")
         ]),
         'available_for': ['qt']
-    },
-    {
-        'name': 'openalias',
-        'fullname': 'OpenAlias',
-        'description': _('Allow for payments to OpenAlias addresses.'),
-        'requires': [('dns', 'dnspython')],
-        'available_for': ['qt', 'cmdline']
     },
     {
         'name': 'plot',

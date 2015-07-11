@@ -31,24 +31,29 @@ from electrum.plugins import run_hook
 
 from util import *
 
+dialogs = []  # Otherwise python randomly garbage collects the dialogs...
+
 def show_transaction(tx, parent, desc=None, prompt_if_unsaved=False):
     d = TxDialog(tx, parent, desc, prompt_if_unsaved)
+    dialogs.append(d)
     d.show()
 
-class TxDialog(QWidget):
+class TxDialog(QDialog):
 
     def __init__(self, tx, parent, desc, prompt_if_unsaved):
         '''Transactions in the wallet will show their description.
         Pass desc to give a description for txs not yet in the wallet.
         '''
         self.tx = tx
-        tx_dict = tx.as_dict()
+        self.tx.deserialize()
         self.parent = parent
         self.wallet = parent.wallet
-        self.saved = not prompt_if_unsaved
+        self.prompt_if_unsaved = prompt_if_unsaved
+        self.saved = False
+        self.broadcast = False
         self.desc = desc
 
-        QWidget.__init__(self)
+        QDialog.__init__(self)
         self.setMinimumWidth(600)
         self.setWindowTitle(_("Transaction"))
 
@@ -82,7 +87,6 @@ class TxDialog(QWidget):
 
         self.broadcast_button = b = QPushButton(_("Broadcast"))
         b.clicked.connect(self.do_broadcast)
-        b.hide()
 
         self.save_button = b = QPushButton(_("Save"))
         b.clicked.connect(self.save)
@@ -97,23 +101,35 @@ class TxDialog(QWidget):
 
         self.copy_button = CopyButton(lambda: str(self.tx), self.parent.app)
 
-        self.buttons = [self.copy_button, self.qr_button, self.sign_button, self.broadcast_button, self.save_button, self.cancel_button]
+        # Action buttons
+        self.buttons = [self.sign_button, self.broadcast_button, self.cancel_button]
+        # Transaction sharing buttons
+        self.sharing_buttons = [self.copy_button, self.qr_button, self.save_button]
+
         run_hook('transaction_dialog', self)
 
-        vbox.addLayout(Buttons(*self.buttons))
+        hbox = QHBoxLayout()
+        hbox.addLayout(Buttons(*self.sharing_buttons))
+        hbox.addStretch(1)
+        hbox.addLayout(Buttons(*self.buttons))
+        vbox.addLayout(hbox)
         self.update()
 
     def do_broadcast(self):
         self.parent.broadcast_transaction(self.tx, self.desc)
-        self.saved = True
+        self.broadcast = True
+        self.update()
 
-    def close(self):
-        if not self.saved:
-            if QMessageBox.question(
-                    self, _('Message'), _('This transaction is not saved. Close anyway?'),
-                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No) == QMessageBox.No:
-                return
-        QWidget.close(self)
+    def closeEvent(self, event):
+        if (self.prompt_if_unsaved and not self.saved and not self.broadcast
+            and QMessageBox.question(
+                self, _('Warning'),
+                _('This transaction is not saved. Close anyway?'),
+                QMessageBox.Yes | QMessageBox.No) == QMessageBox.No):
+            event.ignore()
+        else:
+            event.accept()
+            dialogs.remove(self)
 
     def show_qr(self):
         text = self.tx.raw.decode('hex')
@@ -126,15 +142,17 @@ class TxDialog(QWidget):
 
     def sign(self):
         def sign_done(success):
+            self.prompt_if_unsaved = True
+            self.saved = False
             self.update()
-        self.parent.send_tx(self.tx, sign_done)
+        self.parent.sign_tx(self.tx, sign_done)
 
     def save(self):
         name = 'signed_%s.txn' % (self.tx.hash()[0:8]) if self.tx.is_complete() else 'unsigned.txn'
         fileName = self.parent.getSaveFileName(_("Select where to save your signed transaction"), name, "*.txn")
         if fileName:
             with open(fileName, "w+") as f:
-                f.write(json.dumps(self.tx.as_dict(),indent=4) + '\n')
+                f.write(json.dumps(self.tx.as_dict(), indent=4) + '\n')
             self.show_message(_("Transaction saved successfully"))
             self.saved = True
 
@@ -143,8 +161,8 @@ class TxDialog(QWidget):
         is_relevant, is_mine, v, fee = self.wallet.get_wallet_delta(self.tx)
         tx_hash = self.tx.hash()
         desc = self.desc
-        have_action = False
         time_str = None
+        self.broadcast_button.hide()
 
         if self.tx.is_complete():
             status = _("Signed")
@@ -157,32 +175,20 @@ class TxDialog(QWidget):
                 else:
                     time_str = _('Pending')
                 status = _("%d confirmations")%conf
-                self.broadcast_button.hide()
             else:
-                conf = 0
                 self.broadcast_button.show()
                 # cannot broadcast when offline
                 if self.parent.network is None:
                     self.broadcast_button.setEnabled(False)
-                else:
-                    have_action = True
         else:
             s, r = self.tx.signature_count()
             status = _("Unsigned") if s == 0 else _('Partially signed') + ' (%d/%d)'%(s,r)
-            self.broadcast_button.hide()
             tx_hash = _('Unknown');
 
         if self.wallet.can_sign(self.tx):
             self.sign_button.show()
-            have_action = True
         else:
             self.sign_button.hide()
-
-        # Cancel if an action, otherwise close
-        if have_action:
-            self.cancel_button.setText(_("Cancel"))
-        else:
-            self.cancel_button.setText(_("Close"))
 
         self.tx_hash_e.setText(tx_hash)
         if desc is None:
@@ -216,7 +222,6 @@ class TxDialog(QWidget):
             self.amount_label.setText(_("Transaction unrelated to your wallet"))
 
         run_hook('transaction_dialog_update', self)
-
 
 
     def add_io(self, vbox):

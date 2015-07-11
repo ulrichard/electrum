@@ -34,6 +34,7 @@ from bitcoin import is_address, hash_160_to_bc_address, hash_160, COIN
 from transaction import Transaction
 import paymentrequest
 from paymentrequest import PR_PAID, PR_UNPAID, PR_UNKNOWN, PR_EXPIRED
+import contacts
 
 known_commands = {}
 
@@ -78,7 +79,7 @@ class Commands:
         self.network = network
         self._callback = callback
         self.password = None
-        self.contacts = util.Contacts(self.config)
+        self.contacts = contacts.Contacts(self.config)
 
     def _run(self, method, args, password_getter):
         cmd = known_commands[method]
@@ -199,8 +200,8 @@ class Commands:
         t = Transaction(tx)
         t.deserialize()
         if privkey:
-            pubkey = bitcoin.public_key_from_private_key(sec)
-            t.sign({pubkey:sec})
+            pubkey = bitcoin.public_key_from_private_key(privkey)
+            t.sign({pubkey:privkey})
         else:
             self.wallet.sign_transaction(t, self.password)
         return t

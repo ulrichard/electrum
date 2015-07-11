@@ -18,20 +18,18 @@ from collections import deque
 DEFAULT_PORTS = {'t':'50001', 's':'50002', 'h':'8081', 'g':'8082'}
 
 DEFAULT_SERVERS = {
-    'electrum.be':DEFAULT_PORTS,
+    'electrum.be':{'t':'50001', 's':'50002'},
     'electrum.drollette.com':{'t':'50001', 's':'50002'},
     'erbium1.sytes.net':{'t':'50001', 's':'50002'},
     'ecdsa.net':{'t':'50001', 's':'110'},
-    'eco-electrum.ddns.net':{'t': '50001', 's': '50002', 'h': '80', 'g': '443'},
     'electrum0.electricnewyear.net':{'t':'50001', 's':'50002'},
-    'kirsche.emzy.de':{'t':'50001', 's':'50002', 'h':'8081'},
-    'electrum2.hachre.de':DEFAULT_PORTS,
-    'electrum.hsmiths.com':DEFAULT_PORTS,
-    'EAST.electrum.jdubya.info':DEFAULT_PORTS,
-    'WEST.electrum.jdubya.info':DEFAULT_PORTS,
-    'electrum.no-ip.org':{'t':'50001', 's':'50002', 'h':'80', 'g':'443'},
+    'kirsche.emzy.de':DEFAULT_PORTS,
+    'jwu42.hopto.org':{'t':'50001', 's':'50002'},
+    'VPS.hsmiths.com':{'t':'50001', 's':'50002'},
+    'ELECTRUM.jdubya.info':{'t':'50001', 's':'50002'},
+    'electrum.no-ip.org':{'t':'50001', 's':'50002', 'g':'443'},
     'electrum.thwg.org':DEFAULT_PORTS,
-    'us.electrum.be':DEFAULT_PORTS,
+    'us.electrum.be':{'t':'50001', 's':'50002'},
 }
 
 NODES_RETRY_INTERVAL = 60
@@ -59,7 +57,7 @@ def parse_servers(result):
                     pruning_level = v[1:]
                 if pruning_level == '': pruning_level = '0'
         try:
-            is_recent = float(version)>=float(PROTOCOL_VERSION)
+            is_recent = cmp(util.normalize_version(version), util.normalize_version(PROTOCOL_VERSION)) >= 0
         except Exception:
             is_recent = False
 
@@ -180,6 +178,7 @@ class Network(util.DaemonThread):
         # to or have an ongoing connection with
         self.interface = None
         self.interfaces = {}
+        self.auto_connect = self.config.get('auto_connect', False)
         self.start_network(deserialize_server(self.default_server)[2],
                            deserialize_proxy(self.config.get('proxy')))
 
@@ -256,10 +255,7 @@ class Network(util.DaemonThread):
 
     def get_parameters(self):
         host, port, protocol = deserialize_server(self.default_server)
-        return host, port, protocol, self.proxy, self.auto_connect()
-
-    def auto_connect(self):
-        return self.config.get('auto_connect', False)
+        return host, port, protocol, self.proxy, self.auto_connect
 
     def get_interfaces(self):
         '''The interfaces that are in connected state'''
@@ -326,6 +322,7 @@ class Network(util.DaemonThread):
         self.interfaces = {}
 
     def set_parameters(self, host, port, protocol, proxy, auto_connect):
+        self.auto_connect = auto_connect
         server = serialize_server(host, port, protocol)
         if self.proxy != proxy or self.protocol != protocol:
             # Restart the network defaulting to the given server
@@ -344,7 +341,7 @@ class Network(util.DaemonThread):
 
     def switch_lagging_interface(self, suggestion = None):
         '''If auto_connect and lagging, switch interface'''
-        if self.server_is_lagging() and self.auto_connect():
+        if self.server_is_lagging() and self.auto_connect:
             if suggestion and self.protocol == deserialize_server(suggestion)[2]:
                 self.switch_to_interface(suggestion)
             else:
@@ -499,7 +496,7 @@ class Network(util.DaemonThread):
                 self.nodes_retry_time = now
         # main interface
         if not self.is_connected():
-            if self.auto_connect():
+            if self.auto_connect:
                 self.switch_to_random_interface()
             else:
                 if self.default_server in self.disconnected_servers:
