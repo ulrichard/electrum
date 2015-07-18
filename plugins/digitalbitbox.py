@@ -21,7 +21,7 @@ try:
     DIGIBOX = True
 except ImportError as e:
     DIGIBOX = False
-    print "Digital Bitbox error: %s." % e.message
+    print "Digital Bitbox import error: %s." % e.message
 
 
 digibox_report_buf_size = 2048
@@ -47,6 +47,7 @@ class Plugin(BasePlugin):
     def __init__(self, config, name):
         BasePlugin.__init__(self, config, name)
         self._is_available = self._init()
+        self.handler = None
         ##self.tab_index = None
         self.wallet = None
     
@@ -65,13 +66,11 @@ class Plugin(BasePlugin):
 
     @hook
     def load_wallet(self, wallet, window):
-        
         self.print_error("load_wallet")
         digibox_dialog_tab.set_wallet(wallet)
         self.wallet = wallet
         self.window = window
         self.wallet.plugin = self
-        
         if self.handler is None:
             self.handler = DigiboxQtHandler(self.window.app)
             #self.handler = DigiboxWaitDialog(self.window.app)
@@ -100,7 +99,7 @@ class Plugin(BasePlugin):
         if storage.get('wallet_type') != 'digibox': 
             return
       
-        self.wallet = DigiboxWallet(storage)
+        wallet = DigiboxWallet(storage)
         
         if not self.digibox_is_connected():
             QMessageBox.information(None , _('Error'), _("A Digital Bitbox device is not detected."), _('OK'))
@@ -116,26 +115,26 @@ class Plugin(BasePlugin):
                 seed = wizard.enter_seed_dialog("Enter a BIP32 seed", None, func=lambda x:True)
                 if not seed:
                     continue
-                if not self.wallet.load_electrum(seed):
+                if not wallet.load_electrum(seed):
                     continue
         
             elif action == 'load_sd':
                 decrypt, filename = digibox_dialog_install.sd_info()
                 if decrypt==None:
                     continue
-                if not self.wallet.load_sd(filename, decrypt):
+                if not wallet.load_sd(filename, decrypt):
                     continue
             
             elif action == 'erase':
-                self.wallet.erase_wallet()
+                wallet.erase_wallet()
                 continue
 
             elif action == 'existing':
                 pass
 
 
-            if self.wallet.load_wallet():
-                return self.wallet
+            if wallet.load_wallet():
+                return wallet
 
 
     def is_available(self):        
@@ -162,10 +161,6 @@ class Plugin(BasePlugin):
     def set_enabled(self, enabled):
         self.wallet.storage.put('use_' + self.name, enabled)
 
-    '''
-    def enable(self):
-        return BasePlugin.enable(self)
-    '''
 
     def digibox_is_connected(self):
         d = hid.enumerate(0x03eb, 0x2402)
@@ -183,7 +178,8 @@ class Plugin(BasePlugin):
 #
 class DigiboxWallet(BIP32_HD_Wallet):
     wallet_type = 'digibox'
-
+    root_derivation = "m/44'/0'"
+    
     def __init__(self, storage):
         BIP32_HD_Wallet.__init__(self, storage)
         self.mpk = None
@@ -193,7 +189,7 @@ class DigiboxWallet(BIP32_HD_Wallet):
         self.device_checked = False
         self.wallet_installed = False
         self.force_watching_only = False
-
+        digibox_dialog_wait = self.handler
 
     def give_error(self, message):
         QMessageBox.warning(QDialog(), _('Warning'), _(message), _('OK'))
@@ -202,6 +198,10 @@ class DigiboxWallet(BIP32_HD_Wallet):
     def get_action(self):
         if not self.accounts:
             return 'create_accounts'
+
+    def can_sign_xpubkey(self, x_pubkey):
+        xpub, sequence = BIP32_Account.parse_xpubkey(x_pubkey)
+        return xpub in self.master_public_keys.values()
 
     def can_create_accounts(self):
         return True
@@ -1084,11 +1084,33 @@ class DigiboxQtHandler:
         self.waiting = False
         
         self.win = win
-        self.win.connect(win, SIGNAL('trezor_done'), self.dialog_stop)
-        self.win.connect(win, SIGNAL('message_dialog'), self.message_dialog)
-        self.win.connect(win, SIGNAL('pin_dialog'), self.pin_dialog)
-        self.win.connect(win, SIGNAL('passphrase_dialog'), self.passphrase_dialog)
+        self.win.connect(win, SIGNAL('digibox_done'), self.finish_wait)
+        self.win.connect(win, SIGNAL('message_dialog'), self.start_wait)
+        self.win.connect(win, SIGNAL('message_dialog'), self.start_wait_echo)
+        #self.win.connect(win, SIGNAL('digibox_done'), self.dialog_stop)
+        #self.win.connect(win, SIGNAL('message_dialog'), self.message_dialog)
+        #self.win.connect(win, SIGNAL('pin_dialog'), self.pin_dialog)
+        #self.win.connect(win, SIGNAL('passphrase_dialog'), self.passphrase_dialog)
         self.done = threading.Event()
+
+    '''
+    def stop(self):
+        self.win.emit(SIGNAL('digibox_done'))
+
+    def show_message(self, msg):
+        self.message = msg
+        self.win.emit(SIGNAL('message_dialog'))
+
+    def message_dialog(self):
+        self.d = QDialog()
+        self.d.setModal(1)
+        self.d.setWindowTitle('Please Check Trezor Device')
+        self.d.setWindowFlags(self.d.windowFlags() | QtCore.Qt.WindowStaysOnTopHint)
+        l = QLabel(self.message)
+        vbox = QVBoxLayout(self.d)
+        vbox.addWidget(l)
+        self.d.show()
+    '''
 
     def start_wait(self, message):
         self.d = QDialog()
@@ -1101,8 +1123,8 @@ class DigiboxQtHandler:
         self.d.show()
         if not self.waiting:
             self.waiting = True
-            self.d.connect(digibox_dialog_install, SIGNAL('digibox_done'), self.finish_wait)
-
+            #self.d.connect(digibox_dialog_install, SIGNAL('digibox_done'), self.finish_wait)
+            #self.finish_wait() 
 
     def start_wait_echo(self, data):
         self.d = QDialog()
@@ -1133,12 +1155,14 @@ class DigiboxQtHandler:
     def finish_wait(self):
         self.d.hide()
         self.waiting = False
+        self.win.emit(SIGNAL('digibox_done'))
 
 
 
 if DIGIBOX:
     digibox_dialog_tab = DigiboxTab()
-    digibox_dialog_wait = DigiboxWaitDialog()
+    #digibox_dialog_wait = DigiboxWaitDialog()
+    #digibox_dialog_wait = DigiboxQtHandler()
     digibox_dialog_install = DigiboxInstallDialog()
     digibox_dialog_password = DigiboxPasswordDialog()
 
