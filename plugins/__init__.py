@@ -54,6 +54,15 @@ descriptions = [
         'available_for': ['qt'],
     },
     {
+        'name':'digitalbitbox',
+        'fullname': 'Digital Bitbox Wallet',
+        'description': _('Provides support for Digital Bitbox hardware wallet'),
+        ##'requires': [('','')], TODO add hid instructions
+        'requires_wallet_type': ['digibox'],
+        'registers_wallet_type': ('hardware', 'digibox', _("Digital Bitbox wallet")),
+        'available_for': ['qt'],
+    },
+    {
         'name': 'exchange_rate',
         'fullname': _("Exchange rates"),
         'description': _("Exchange rates and currency conversion tools."),

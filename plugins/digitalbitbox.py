@@ -43,38 +43,44 @@ def Hash(x):
 # Electrum plugin functionality
 #
 class Plugin(BasePlugin):
-
-    def fullname(self):
-        return 'Digital Bitbox'
-
-    def description(self):
-        return 'Provides support for the Digital Bitbox hardware wallet\n'
-
+    
     def __init__(self, config, name):
         BasePlugin.__init__(self, config, name)
         self._is_available = self._init()
-        self.tab_index = None
+        ##self.tab_index = None
         self.wallet = None
-        if self._is_available:
-            electrum.wallet.wallet_types.append(('hardware', 'digibox', _("Digital Bitbox"), DigiboxWallet))
-
+    
     def _init(self):
         return DIGIBOX
-   
-
+    
+     
+    def constructor(self, s):
+        return DigiboxWallet(s)
+     
+    
     @hook
     def init_qt(self, gui):
         self.main_gui = gui
         self.tab_index = self.main_gui.main_window.tabs.addTab(digibox_dialog_tab.create_digibox_tab(), _('Digital Bitbox') )
 
     @hook
-    def load_wallet(self, wallet):
+    def load_wallet(self, wallet, window):
+        
+        self.print_error("load_wallet")
         digibox_dialog_tab.set_wallet(wallet)
+        self.wallet = wallet
+        self.window = window
+        self.wallet.plugin = self
+        
+        if self.handler is None:
+            self.handler = DigiboxQtHandler(self.window.app)
+            #self.handler = DigiboxWaitDialog(self.window.app)
+        
         if not self.digibox_is_connected():
-            #QMessageBox.information(self.window, _('Error'), _("A Digital Bitbox device is not detected.\n" + \
-            #                                                   "Continuing in watching-only mode."), _('OK') )
             self.wallet.force_watching_only = True
-   
+  
+    '''
+    # moved to sign_transaction
     @hook
     def send_tx(self, tx):
         tx.error = None
@@ -82,6 +88,12 @@ class Plugin(BasePlugin):
             self.wallet.digibox_sign(tx)
         except Exception as e:
             tx.error = str(e)
+    '''
+    
+    @hook
+    def installwizard_load_wallet(self, wallet, window):
+        self.load_wallet(wallet, window) 
+    
     
     @hook
     def installwizard_restore(self, wizard, storage):
@@ -150,9 +162,10 @@ class Plugin(BasePlugin):
     def set_enabled(self, enabled):
         self.wallet.storage.put('use_' + self.name, enabled)
 
+    '''
     def enable(self):
         return BasePlugin.enable(self)
-
+    '''
 
     def digibox_is_connected(self):
         d = hid.enumerate(0x03eb, 0x2402)
@@ -382,11 +395,18 @@ class DigiboxWallet(BIP32_HD_Wallet):
 
 
     def sign_transaction(self, tx, password):
+        tx.error = None
+        try:
+            self.digibox_sign(tx)
+        except Exception as e:
+            tx.error = str(e)
+            print e 
+        '''
         # the tx is signed via the send_tx() hook to digibox_sign
         # otherwise the gui wait dialog causes a crash
         if tx.error:
             raise BaseException(tx.error)
-    
+        '''
     
     
     # ########################################################################
@@ -472,6 +492,8 @@ class DigiboxWallet(BIP32_HD_Wallet):
                 print msg
             msg = msg.encode('ascii')
             
+            print 'debug 0'
+            
             if encrypt:
                 # set require_pass = False for non-sensitive commands
                 # to avoid asking for the password too often
@@ -481,6 +503,8 @@ class DigiboxWallet(BIP32_HD_Wallet):
                 elif require_pass or not self.has_pass:
                     new_pass = False
                     sham, self.password = digibox_dialog_password.password_dialog(new_pass)
+            
+                print 'debug 1'
                 
                 if not self.password==None:
                     if len(self.password):
@@ -497,6 +521,7 @@ class DigiboxWallet(BIP32_HD_Wallet):
             if 'reset' in msg_l:
                 wait_msg = "Press the touch button 3 times to erase."
 
+            print 'debug A'
             
             digibox_dialog_wait.start_wait(_(wait_msg))
             self.hid_device.write('\0' + bytearray(msg) + '\0' * (digibox_report_buf_size - len(msg))) 
@@ -1029,11 +1054,14 @@ class DigiboxPasswordDialog(QThread):
 
     def password_dialog(self, new_pass=False, old_pass=True):
         msg = _("Please enter your password")
+        print 'debug P'
         
         self.d = QDialog()
         self.d.setModal(1)
         self.d.setLayout( self.make_password_dialog(msg, new_pass, old_pass) )
 
+        print 'debug P'
+        
         confirmed, old_password, new_password = self.run_password_dialog()
         if not confirmed:
             if new_pass:
@@ -1048,10 +1076,19 @@ class DigiboxPasswordDialog(QThread):
 #
 # PyQT waiting windows
 #
-class DigiboxWaitDialog(QThread):
-    def __init__(self):
-        QThread.__init__(self)
+#class DigiboxWaitDialog:
+class DigiboxQtHandler:
+    
+    def __init__(self, win):
+        #QThread.__init__(self)
         self.waiting = False
+        
+        self.win = win
+        self.win.connect(win, SIGNAL('trezor_done'), self.dialog_stop)
+        self.win.connect(win, SIGNAL('message_dialog'), self.message_dialog)
+        self.win.connect(win, SIGNAL('pin_dialog'), self.pin_dialog)
+        self.win.connect(win, SIGNAL('passphrase_dialog'), self.passphrase_dialog)
+        self.done = threading.Event()
 
     def start_wait(self, message):
         self.d = QDialog()

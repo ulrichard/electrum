@@ -37,6 +37,7 @@ setup(
         'protobuf',
         'tlslite',
         'dnspython',
+        'hid', 
     ],
     package_dir={
         'electrum': 'lib',
