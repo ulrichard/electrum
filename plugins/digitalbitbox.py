@@ -49,6 +49,7 @@ class Plugin(BasePlugin):
         self._is_available = self._init()
         ##self.tab_index = None
         self.wallet = None
+        self.handler = None
     
     def _init(self):
         return DIGIBOX
@@ -88,7 +89,18 @@ class Plugin(BasePlugin):
             self.wallet.digibox_sign(tx)
         except Exception as e:
             tx.error = str(e)
+    @hook
+    def sign_tx(self, tx):
+        tx.error = None
+        try:
+            self.wallet.sign_transaction(tx, None)
+        except Exception as e:
+            tx.error = str(e)
     '''
+    def sign_transaction(self, tx, password):
+        if tx.is_complete():
+            return
+        self.plugin.sign_transaction(tx)
     
     @hook
     def installwizard_load_wallet(self, wallet, window):
@@ -253,6 +265,9 @@ class DigiboxWallet(BIP32_HD_Wallet):
         account_id, (change, address_index) = self.get_address_index(address)
         return "m/44'/0'/%s'/%d/%d" % (account_id, change, address_index)
     
+    def create_main_account(self, password):
+        self.create_account('Main account', None) #name, empty password
+    '''
     def create_main_account(self, password=None):
         if self.new_wallet()==None:
             raise Exception('Could not create a new wallet. Exiting.')
@@ -266,6 +281,7 @@ class DigiboxWallet(BIP32_HD_Wallet):
         else:
             ret = False 
         return ret
+    '''
 
     def derive_xkeys(self, root, derivation, password):
         derivation = derivation.replace(self.root_name,"m/44'/0'/")
@@ -338,9 +354,9 @@ class DigiboxWallet(BIP32_HD_Wallet):
                 if 'error' in reply[key]:
                     if reply[key]['error'] == 'Please set a password.':
                         is_set = False
-                        password, sham = digibox_dialog_password.password_dialog(True, False)
+                        password, sham = self.plugin.handler.password_dialog(True, False)
             if is_set:
-                sham, password = digibox_dialog_password.password_dialog(True, True)
+                sham, password = self.plugin.handler.password_dialog(True, True)
             
             if not password:
                 return False
@@ -368,11 +384,14 @@ class DigiboxWallet(BIP32_HD_Wallet):
 
     def load_electrum(self, seed):
         if self.password_set():
-            digibox_dialog_wait.start_wait(_("Loading the mnemonic, please wait."))
+            self.plugin.handler.show_message(_("Loading the mnemonic, please wait."))
+            #digibox_dialog_wait.start_wait(_("Loading the mnemonic, please wait."))
             if self.commander(('{"seed":{"source":"%s"}}' % seed), False):
-                digibox_dialog_wait.finish_wait()
+                self.plugin.handler.stop()
+                #digibox_dialog_wait.finish_wait()
                 return True
-            digibox_dialog_wait.finish_wait()
+            self.plugin.handler.stop()
+            #digibox_dialog_wait.finish_wait()
         return False
 
 
@@ -388,19 +407,24 @@ class DigiboxWallet(BIP32_HD_Wallet):
         salt = digibox_dialog_install.new_wallet()
         ret = None
         if self.password_set():
-            digibox_dialog_wait.start_wait(_("Creating a new wallet, please wait."))
+            self.plugin.handler.show_message(_("Creating a new wallet, please wait."))
+            #digibox_dialog_wait.start_wait(_("Creating a new wallet, please wait."))
             ret = self.commander('{"seed":{"source":"create","salt":"%s"}}' % salt, False)
-            digibox_dialog_wait.finish_wait() 
+            self.plugin.handler.stop() 
+            #digibox_dialog_wait.finish_wait() 
         return ret 
 
 
-    def sign_transaction(self, tx, password):
+    def sign_transaction(self, tx):
+        self.digibox_sign(tx)
+        '''
         tx.error = None
         try:
             self.digibox_sign(tx)
         except Exception as e:
             tx.error = str(e)
             print e 
+        '''
         '''
         # the tx is signed via the send_tx() hook to digibox_sign
         # otherwise the gui wait dialog causes a crash
@@ -502,7 +526,8 @@ class DigiboxWallet(BIP32_HD_Wallet):
                     self.has_pass = False
                 elif require_pass or not self.has_pass:
                     new_pass = False
-                    sham, self.password = digibox_dialog_password.password_dialog(new_pass)
+                    self.password = '0000';
+                    #sham, self.password = self.plugin.handler.password_dialog(new_pass)
             
                 print 'debug 1'
                 
@@ -522,15 +547,18 @@ class DigiboxWallet(BIP32_HD_Wallet):
                 wait_msg = "Press the touch button 3 times to erase."
 
             print 'debug A'
+           
+            #digibox_dialog_wait.start_wait(_(wait_msg))
+            self.plugin.handler.show_message(_(wait_msg))
             
-            digibox_dialog_wait.start_wait(_(wait_msg))
             self.hid_device.write('\0' + bytearray(msg) + '\0' * (digibox_report_buf_size - len(msg))) 
 	    r = []
             while len(r) < digibox_report_buf_size:    
 	        r = r + self.hid_device.read(digibox_report_buf_size)
             r = str(bytearray(r)).rstrip(' \t\r\n\0')
             reply = json.loads(r)
-            digibox_dialog_wait.finish_wait()
+            #digibox_dialog_wait.finish_wait()
+            self.plugin.handler.stop()
             
             if debug:
                 print "Reply str:\n" + r
@@ -543,7 +571,8 @@ class DigiboxWallet(BIP32_HD_Wallet):
                 #echo = DecodeAES(secret, ''.join(reply["echo"]))
                 if debug:
                     print "Echo:  " + echo
-                digibox_dialog_wait.start_wait_echo(echo)
+                self.plugin.handler.show_echo(echo)
+                #digibox_dialog_wait.start_wait_echo(echo)
                 self.hid_device.write('\0' + bytearray(msg) + '\0' * (digibox_report_buf_size - len(msg))) 
 	        r = []
                 while len(r) < digibox_report_buf_size:    
@@ -551,7 +580,8 @@ class DigiboxWallet(BIP32_HD_Wallet):
                     
 		r = str(bytearray(r)).rstrip(' \t\r\n\0')
                 reply = json.loads(r)
-                digibox_dialog_wait.finish_wait()
+                self.plugin.handler.stop()
+                #digibox_dialog_wait.finish_wait()
             
             
             error = False
@@ -596,8 +626,10 @@ class DigiboxWallet(BIP32_HD_Wallet):
         except:
             print "Unknown exception"
         finally:
-            if digibox_dialog_wait.waiting:
-                digibox_dialog_wait.finish_wait()
+            #if digibox_dialog_wait.waiting:
+            if self.plugin.handler.waiting:
+                self.plugin.handler.stop()
+                #digibox_dialog_wait.finish_wait()
             self.hid_close()
             return reply
 
@@ -732,7 +764,7 @@ class DigiboxTab(object):
 
         # new password
         def password_button_push():
-            password, old_password = digibox_dialog_password.password_dialog(True)
+            password, old_password = self.plugin.handler.password_dialog(True)
             password = '' if password==None else password
             old_password = '' if old_password==None else old_password
             if not self.wallet.commander(('{"password":"%s"}' % password), False, True, old_password)==None:
@@ -975,12 +1007,15 @@ class DigiboxInstallDialog(QThread):
 #
 # PyQT password dialog
 #
+'''
 class DigiboxPasswordDialog(QThread):
     def __init__(self):
         QThread.__init__(self)
 
 
     def make_password_dialog(self, msg, new_pass, old_pass):
+        
+        print 'debug make pw dialog P'
         
         self.d.pw = QLineEdit()
         self.d.pw.setEchoMode(2)
@@ -1011,6 +1046,8 @@ class DigiboxPasswordDialog(QThread):
         grid.setSpacing(8)
         grid.setColumnMinimumWidth(0, 250)
         grid.setColumnStretch(1,1)
+        
+        print 'debug make pw dialog Q'
 
         if old_pass:
             grid.addWidget(QLabel(_('Password')), 0, 1)
@@ -1027,6 +1064,7 @@ class DigiboxPasswordDialog(QThread):
         #self.d.pw_strength = QLabel()
         #grid.addWidget(self.d.pw_strength, 3, 0, 1, 2)
         #self.d.new_pw.textChanged.connect(lambda: update_password_strength(self.d.pw_strength, self.d.new_pw.text()))
+        print 'debug make pw dialog R'
 
         vbox.addStretch(1)
         vbox.addLayout(Buttons(CancelButton(self.d), OkButton(self.d)))
@@ -1057,10 +1095,12 @@ class DigiboxPasswordDialog(QThread):
         print 'debug P'
         
         self.d = QDialog()
+        print 'debug P'
         self.d.setModal(1)
+        print 'debug P'
         self.d.setLayout( self.make_password_dialog(msg, new_pass, old_pass) )
 
-        print 'debug P'
+        print 'debug Q'
         
         confirmed, old_password, new_password = self.run_password_dialog()
         if not confirmed:
@@ -1069,7 +1109,7 @@ class DigiboxPasswordDialog(QThread):
             raise Exception("Password not set")
             return None, None
         return new_password, old_password 
-
+'''
     
 
 # ########################################################################
@@ -1084,12 +1124,23 @@ class DigiboxQtHandler:
         self.waiting = False
         
         self.win = win
+        self.win.connect(win, SIGNAL('digibox_done'), self.dialog_stop)
+        self.win.connect(win, SIGNAL('message_dialog'), self.message_dialog)
+        '''
         self.win.connect(win, SIGNAL('trezor_done'), self.dialog_stop)
         self.win.connect(win, SIGNAL('message_dialog'), self.message_dialog)
         self.win.connect(win, SIGNAL('pin_dialog'), self.pin_dialog)
         self.win.connect(win, SIGNAL('passphrase_dialog'), self.passphrase_dialog)
+        '''
         self.done = threading.Event()
+        
+    def stop(self):
+        self.win.emit(SIGNAL('digibox_done'))
 
+    def show_message(self, msg):
+        self.message = msg
+        self.win.emit(SIGNAL('message_dialog'))
+    '''
     def start_wait(self, message):
         self.d = QDialog()
         self.d.setModal(1)
@@ -1102,8 +1153,37 @@ class DigiboxQtHandler:
         if not self.waiting:
             self.waiting = True
             self.d.connect(digibox_dialog_install, SIGNAL('digibox_done'), self.finish_wait)
+    '''
 
+    def show_echo(self, data):
+        self.d = QDialog(None)
+        self.d.setModal(1)
+        self.d.setWindowTitle(_("Digital Bitbox Verification"))
+        self.d.setWindowFlags(self.d.windowFlags() | Qt.WindowStaysOnTopHint)
+        
+        vbox = QVBoxLayout(self.d)
+        
+        text0 = QLabel(_("Verification QR code:"))
+        text1 = QLabel(_("Push the touch button to continue."))
+        
+        qrw = QRCodeWidget(data)
+        
+        hbox = QHBoxLayout()
+        hbox.addStretch(1)
 
+        vbox.addWidget(text0)
+        vbox.addWidget(qrw, 1)
+        vbox.addWidget(text1)
+
+        vbox.addLayout(hbox)
+        self.d.setLayout(vbox)
+        self.d.show()
+        if not self.waiting:
+            self.waiting = True
+            ###self.d.connect(digibox_dialog_wait, SIGNAL('qr_done'), self.finish_wait)
+            #self.win.emit(SIGNAL('digibox_done'))
+    
+    '''
     def start_wait_echo(self, data):
         self.d = QDialog()
         self.d.setModal(1)
@@ -1128,19 +1208,136 @@ class DigiboxQtHandler:
         self.d.show()
         if not self.waiting:
             self.waiting = True
-            self.d.connect(digibox_dialog_wait, SIGNAL('qr_done'), self.finish_wait)
+            ###self.d.connect(digibox_dialog_wait, SIGNAL('qr_done'), self.finish_wait)
+            self.win.emit(SIGNAL('digibox_done'))
         
     def finish_wait(self):
         self.d.hide()
         self.waiting = False
+    '''
+
+    def message_dialog(self):
+        self.d = QDialog()
+        self.d.setModal(1)
+        self.d.setWindowTitle('Digital Bitbox')
+        self.d.setWindowFlags(self.d.windowFlags() | Qt.WindowStaysOnTopHint)
+        l = QLabel(self.message)
+        vbox = QVBoxLayout(self.d)
+        vbox.addWidget(l)
+        self.d.show()
+
+    def dialog_stop(self):
+        self.d.hide()
+
+
+    def make_password_dialog(self, msg, new_pass, old_pass):
+        
+        print 'debug make pw dialog P'
+        
+        self.d.pw = QLineEdit()
+        self.d.pw.setEchoMode(2)
+        self.d.new_pw = QLineEdit()
+        self.d.new_pw.setEchoMode(2)
+        self.d.conf_pw = QLineEdit()
+        self.d.conf_pw.setEchoMode(2)
+
+        vbox = QVBoxLayout()
+        label = QLabel(msg)
+        label.setWordWrap(True)
+
+        grid = QGridLayout()
+        grid.setSpacing(8)
+        grid.setColumnMinimumWidth(0, 70)
+        grid.setColumnStretch(1,1)
+
+        logo = QLabel()
+        lockfile = ":icons/lock.png"
+        logo.setPixmap(QPixmap(lockfile).scaledToWidth(36))
+        logo.setAlignment(Qt.AlignCenter)
+
+        grid.addWidget(logo,  0, 0)
+        grid.addWidget(label, 0, 1, 1, 2)
+        vbox.addLayout(grid)
+
+        grid = QGridLayout()
+        grid.setSpacing(8)
+        grid.setColumnMinimumWidth(0, 250)
+        grid.setColumnStretch(1,1)
+        
+        print 'debug make pw dialog Q'
+
+        if old_pass:
+            grid.addWidget(QLabel(_('Password')), 0, 1)
+            grid.addWidget(self.d.pw, 0, 2)
+        if new_pass:
+            grid.addWidget(QLabel(_('New Password') if new_pass else _('Password')), 1, 1)
+            grid.addWidget(self.d.new_pw, 1, 2)
+            grid.addWidget(QLabel(_('Confirm Password')), 2, 1)
+            grid.addWidget(self.d.conf_pw, 2, 2)
+
+        vbox.addLayout(grid)
+
+        #Password Strength Label
+        #self.d.pw_strength = QLabel()
+        #grid.addWidget(self.d.pw_strength, 3, 0, 1, 2)
+        #self.d.new_pw.textChanged.connect(lambda: update_password_strength(self.d.pw_strength, self.d.new_pw.text()))
+        print 'debug make pw dialog R'
+
+        vbox.addStretch(1)
+        vbox.addLayout(Buttons(CancelButton(self.d), OkButton(self.d)))
+        return vbox
+
+
+    def run_password_dialog(self):
+
+        if not self.d.exec_():
+            return False, None, None
+
+        password = str(self.d.pw.text()) 
+        new_password = str(self.d.new_pw.text())
+        new_password2 = str(self.d.conf_pw.text())
+
+        if new_password != new_password2:
+            QMessageBox.warning(None, _('Error'), _('Passwords do not match'), _('OK'))
+            return self.run_password_dialog()
+
+        if not new_password:
+            new_password = None
+
+        return True, password, new_password
+
+
+    def password_dialog(self, new_pass=False, old_pass=True):
+        msg = _("Please enter your password")
+        print 'debug P'
+        
+        self.d = QDialog()
+        print 'debug P'
+        self.d.setModal(1)
+        print 'debug P'
+        self.d.setLayout( self.make_password_dialog(msg, new_pass, old_pass) )
+
+        print 'debug Q'
+        
+        confirmed, old_password, new_password = self.run_password_dialog()
+        if not confirmed:
+            if new_pass:
+                QMessageBox.warning(None, _('Error'), _("Password not changed"), _('OK'))
+            raise Exception("Password not set")
+            return None, None
+        return new_password, old_password 
+
+
+
 
 
 
 if DIGIBOX:
     digibox_dialog_tab = DigiboxTab()
-    digibox_dialog_wait = DigiboxWaitDialog()
+    #digibox_dialog_wait = DigiboxWaitDialog()
+    #digibox_dialog_wait = DigiboxQtHandler()
     digibox_dialog_install = DigiboxInstallDialog()
-    digibox_dialog_password = DigiboxPasswordDialog()
+    #digibox_dialog_password = DigiboxPasswordDialog()
 
 
 
