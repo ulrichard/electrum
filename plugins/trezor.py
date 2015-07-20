@@ -2,7 +2,6 @@ from binascii import unhexlify
 from struct import pack
 from sys import stderr
 from time import sleep
-from base64 import b64encode, b64decode
 import unicodedata
 import threading
 import re
@@ -161,7 +160,8 @@ class Plugin(BasePlugin):
             return
         wallet = TrezorWallet(storage)
         self.wallet = wallet
-        passphrase = self.handler.get_passphrase(_("Please enter your Trezor passphrase.") + '\n' + _("Press OK if you do not use one."))
+        handler = TrezorQtHandler(wizard)
+        passphrase = handler.get_passphrase(_("Please enter your Trezor passphrase.") + '\n' + _("Press OK if you do not use one."))
         if passphrase is None:
             return
         password = wizard.password_dialog()
@@ -459,8 +459,7 @@ class TrezorWallet(BIP32_HD_Wallet):
             give_error(e)
         finally:
             self.plugin.handler.stop()
-        b64_msg_sig = b64encode(msg_sig.signature)
-        return str(b64_msg_sig)
+        return msg_sig.signature
 
     def sign_transaction(self, tx, password):
         if tx.is_complete():
