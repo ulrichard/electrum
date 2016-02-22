@@ -161,36 +161,11 @@ class BTChipWallet(BIP44_HW_Wallet):
     def sign_transaction(self, tx, password):
         if tx.is_complete():
             return
-        # previous transactions used as inputs
-        prev_tx = {}
-        # path of the xpubs that are involved
-        xpub_path = {}
-        for txin in tx.inputs():
-            tx_hash = txin['prevout_hash']
-            prev_tx[tx_hash] = self.get_input_tx(tx_hash)
-            for x_pubkey in txin['x_pubkeys']:
-                if not is_extended_pubkey(x_pubkey):
-                    continue
-                xpub = x_to_xpub(x_pubkey)
-                for k, v in self.master_public_keys.items():
-                    if v == xpub:
-                        acc_id = re.match("x/(\d+)'", k).group(1)
-                        xpub_path[xpub] = self.account_derivation(acc_id)
-
-        self.do_sign_transaction(tx, prev_tx, xpub_path)
-
-    def do_sign_transaction(self, tx, prev_tx, xpub_path):
-        if tx.is_complete():
-            return
         client = self.get_client()
-        inputs = self.tx_inputs(tx, True)
-        outputs = self.tx_outputs(wallet, tx)
         self.signing = True
-
-#        inputs = []
-#        inputsPaths = []
-#        prev_tx = {} # previous transactions used as inputs
-#        pubKeys = []
+        inputs = []
+        inputsPaths = []
+        pubKeys = []
         trustedInputs = []
         redeemScripts = []
         signatures = []
@@ -202,7 +177,64 @@ class BTChipWallet(BIP44_HW_Wallet):
         use2FA = False
         pin = ""
         rawTx = tx.serialize()
-        # Fetch inputs of the transaction to sign
+
+        # previous transactions used as inputs
+        prev_tx = {}
+        # path of the xpubs that are involved
+        xpub_path = {}
+        for txin in tx.inputs():
+            if ('is_coinbase' in txin and txin['is_coinbase']):
+                self.give_error("Coinbase not supported")     # should never happen
+            tx_hash = txin['prevout_hash']
+            prev_tx[tx_hash] = self.get_input_tx(tx_hash)
+
+            inputs.append([ prev_tx[tx_hash].raw,
+                             txin['prevout_n'] ])
+            address = txin['address']
+            print(address)
+
+            if address[0] == '3' : # TODO : better check for P2SH            
+                for x_pubkey in txin['x_pubkeys']:
+#                    print('x_pubkey: ', x_pubkey)
+                    if not is_extended_pubkey(x_pubkey):
+                        continue
+                    xpub = x_to_xpub(x_pubkey)
+                    print(xpub)
+                    for k, v in self.master_public_keys.items():
+#                        print(k, v)
+                        if v == xpub:
+                            acc_id = re.match("x/(\d+)'", k).group(1)
+                            xpub_path[xpub] = self.account_derivation(acc_id)
+                            print('acc_id: ', acc_id, ' path: ', xpub_path[xpub])
+
+                print(xpub)
+                print(xpub_path[xpub])
+                inputsPaths.append(xpub_path[xpub])
+
+                # find which key is mine
+#                xpub_n = self.client.expand_path(self.xpub_path[xpub])
+#                print(xpub_n)
+
+#                print(self.get_public_keys(address))
+#                pubKeys.append(self.get_public_keys(address))
+            else:
+                inputsPaths.append(self.address_id(address))
+                pubKeys.append(self.get_public_keys(address))
+
+
+        # Recognize outputs - only one output and one change is authorized
+        if len(tx.outputs()) > 2: # should never happen
+            self.give_error("Transaction with more than 2 outputs not supported")
+        for type, address, amount in tx.outputs():
+            assert type == TYPE_ADDRESS
+            if self.is_change(address):
+                changePath = self.address_id(address)
+                changeAmount = amount
+            else:
+                if output <> None: # should never happen
+                    self.give_error("Multiple outputs with no change not supported")
+                output = address
+                outputAmount = amount
 
         self.get_client() # prompt for the PIN before displaying the dialog if necessary
         if not self.check_proper_device():
@@ -285,91 +317,6 @@ class BTChipWallet(BIP44_HW_Wallet):
         tx.update(updatedTransaction)
         client.bad = use2FA
         self.signing = False
-
-    def tx_inputs(self, tx, for_sig=False):
-        inputs = []
-        for txin in tx.inputs():
-            txinputtype = self.types.TxInputType()
-            if txin.get('is_coinbase'):
-                self.give_error("Coinbase not supported")     # should never happen
-            else:
-                if for_sig:
-                    x_pubkeys = txin['x_pubkeys']
-                    if len(x_pubkeys) == 1:
-                        x_pubkey = x_pubkeys[0]
-                        xpub, s = BIP32_Account.parse_xpubkey(x_pubkey)
-                        xpub_n = self.client_class.expand_path(self.xpub_path[xpub])
-                        txinputtype.address_n.extend(xpub_n + s)
-                    else:
-                        def f(x_pubkey):
-                            if is_extended_pubkey(x_pubkey):
-                                xpub, s = BIP32_Account.parse_xpubkey(x_pubkey)
-                            else:
-                                xpub = xpub_from_pubkey(x_pubkey.decode('hex'))
-                                s = []
-                            node = self.ckd_public.deserialize(xpub)
-                            return self.types.HDNodePathType(node=node, address_n=s)
-                        pubkeys = map(f, x_pubkeys)
-                        multisig = self.types.MultisigRedeemScriptType(
-                            pubkeys=pubkeys,
-                            signatures=map(lambda x: x.decode('hex') if x else '', txin.get('signatures')),
-                            m=txin.get('num_sig'),
-                        )
-                        txinputtype = self.types.TxInputType(
-                            script_type=self.types.SPENDMULTISIG,
-                            multisig=multisig
-                        )
-                        # find which key is mine
-                        for x_pubkey in x_pubkeys:
-                            if is_extended_pubkey(x_pubkey):
-                                xpub, s = BIP32_Account.parse_xpubkey(x_pubkey)
-                                if xpub in self.xpub_path:
-                                    xpub_n = self.client_class.expand_path(self.xpub_path[xpub])
-                                    txinputtype.address_n.extend(xpub_n + s)
-                                    break
-
-                prev_hash = unhexlify(txin['prevout_hash'])
-                prev_index = txin['prevout_n']
-
-            txinputtype.prev_hash = prev_hash
-            txinputtype.prev_index = prev_index
-
-            if 'scriptSig' in txin:
-                script_sig = txin['scriptSig'].decode('hex')
-                txinputtype.script_sig = script_sig
-
-            if 'sequence' in txin:
-                sequence = txin['sequence']
-                txinputtype.sequence = sequence
-
-            inputs.append(txinputtype)
-
-        return inputs
-
-    def tx_outputs(self, wallet, tx):
-        if len(tx.outputs()) > 2: # should never happen
-            self.give_error("Transaction with more than 2 outputs not supported")
-        outputs = []
-        for type, address, amount in tx.outputs():
-            assert type == TYPE_ADDRESS
-            txoutputtype = self.types.TxOutputType()
-            if wallet.is_change(address):
-                address_path = wallet.address_id(address)
-                address_n = self.client_class.expand_path(address_path)
-                txoutputtype.address_n.extend(address_n)
-            else:
-                txoutputtype.address = address
-            txoutputtype.amount = amount
-            addrtype, hash_160 = bc_address_to_hash_160(address)
-            if addrtype == 0:
-                txoutputtype.script_type = self.types.PAYTOADDRESS
-            elif addrtype == 5:
-                txoutputtype.script_type = self.types.PAYTOSCRIPTHASH
-            else:
-                raise BaseException('addrtype')
-            outputs.append(txoutputtype)
-
-        return outputs
 
     def check_proper_device(self):
         pubKey = DecodeBase58Check(self.master_public_keys["x/0'"])[45:]
