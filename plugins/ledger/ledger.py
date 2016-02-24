@@ -13,6 +13,8 @@ from ..hw_wallet import HW_PluginBase
 from electrum.util import format_satoshis_plain, print_error
 from electrum.transaction import (deserialize, is_extended_pubkey,
                                   Transaction, x_to_xpub)
+from electrum.account import BIP32_Account
+from electrum.bitcoin import public_key_to_bc_address
 
 try:
     from btchip.btchipComm import getDongle, DongleWait
@@ -191,7 +193,7 @@ class BTChipWallet(BIP44_HW_Wallet):
             inputs.append([ prev_tx[tx_hash].raw,
                              txin['prevout_n'] ])
             address = txin['address']
-            print(address)
+#            print(address)
 
             if address[0] == '3' : # TODO : better check for P2SH            
                 for x_pubkey in txin['x_pubkeys']:
@@ -205,22 +207,21 @@ class BTChipWallet(BIP44_HW_Wallet):
                         if v == xpub:
                             acc_id = re.match("x/(\d+)'", k).group(1)
                             xpub_path[xpub] = self.account_derivation(acc_id)
-                            print('acc_id: ', acc_id, ' path: ', xpub_path[xpub])
+#                            print('acc_id: ', acc_id, ' path: ', xpub_path[xpub])
 
-                print(xpub)
-                print(xpub_path[xpub])
+#                print(xpub)
+#                print(xpub_path[xpub])
                 inputsPaths.append(xpub_path[xpub])
 
-                # find which key is mine
-#                xpub_n = self.client.expand_path(self.xpub_path[xpub])
-#                print(xpub_n)
+                pubkey = BIP32_Account.derive_pubkey_from_xpub(xpub, 0, 0)
+#                print(pubkey)
+#                addr = public_key_to_bc_address(pubkey.decode('hex'))
+#                print(addr)
 
-#                print(self.get_public_keys(address))
-#                pubKeys.append(self.get_public_keys(address))
+                pubKeys.append(pubkey)
             else:
                 inputsPaths.append(self.address_id(address))
                 pubKeys.append(self.get_public_keys(address))
-
 
         # Recognize outputs - only one output and one change is authorized
         if len(tx.outputs()) > 2: # should never happen
@@ -252,13 +253,17 @@ class BTChipWallet(BIP44_HW_Wallet):
             firstTransaction = True
             inputIndex = 0
             while inputIndex < len(inputs):
+                print('startUntrustedTransaction', firstTransaction, inputIndex,
+                trustedInputs, redeemScripts[inputIndex])
                 self.get_client().startUntrustedTransaction(firstTransaction, inputIndex,
                 trustedInputs, redeemScripts[inputIndex])
                 outputData = self.get_client().finalizeInput(output, format_satoshis_plain(outputAmount),
                 format_satoshis_plain(self.get_tx_fee(tx)), changePath, bytearray(rawTx.decode('hex')))
+                print(outputData)
                 if firstTransaction:
                     transactionOutput = outputData['outputData']
                 if outputData['confirmationNeeded']:
+                    print('confirmationNeeded')
                     # TODO : handle different confirmation types. For the time being only supports keyboard 2FA
                     self.handler.clear_dialog()
                     if 'keycardData' in outputData:
