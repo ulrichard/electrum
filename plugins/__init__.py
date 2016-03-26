@@ -24,3 +24,14 @@
 # SOFTWARE.
 
 
+descriptions = [
+    {
+        'name':'digitalbitbox',
+        'fullname': 'Digital Bitbox Wallet',
+        'description': _('Provides support for Digital Bitbox hardware wallet'),
+        ##'requires': [('','')], TODO add hid instructions
+        'requires_wallet_type': ['digibox'],
+        'registers_wallet_type': ('hardware', 'digibox', _("Digital Bitbox wallet")),
+        'available_for': ['qt'],
+    }
+]
